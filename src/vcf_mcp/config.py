@@ -21,20 +21,52 @@ from pathlib import Path
 
 PKG_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PKG_ROOT.parent.parent
-SPEC_DIR = Path(os.environ.get("VCF_MCP_SPEC_DIR", PROJECT_ROOT / "specs"))
+
+# The server runs two ways: from a git checkout, and from an installed copy
+# (pip, or `uvx` with no install at all). A checkout keeps its files at the
+# repo root; an installed copy has no repo root to write to, so it uses the
+# platform's config/state directories instead.
+IN_CHECKOUT = (PROJECT_ROOT / "pyproject.toml").is_file()
+CONFIG_HOME = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "vcf-mcp"
+)
+STATE_HOME = (
+    Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "vcf-mcp"
+)
+
+
+def _site_path(name: str) -> Path:
+    """Where a user-owned file lives: repo root in a checkout, else ~/.config."""
+    return PROJECT_ROOT / name if IN_CHECKOUT else CONFIG_HOME / name
+
+
+# Specs are shipped inside the package so an installed copy is self-contained;
+# a checkout keeps them at the repo root, where they are easier to update.
+_BUNDLED_SPECS = PKG_ROOT / "specs"
+SPEC_DIR = Path(
+    os.environ.get(
+        "VCF_MCP_SPEC_DIR",
+        PROJECT_ROOT / "specs" if IN_CHECKOUT else _BUNDLED_SPECS,
+    )
+)
 CACHE_DIR = Path(
     os.environ.get("VCF_MCP_CACHE_DIR", Path.home() / ".cache" / "vcf-mcp")
 )
 AUDIT_LOG = Path(
-    os.environ.get("VCF_MCP_AUDIT_LOG", PROJECT_ROOT / "logs" / "vcf-mcp-audit.jsonl")
+    os.environ.get(
+        "VCF_MCP_AUDIT_LOG",
+        PROJECT_ROOT / "logs" / "vcf-mcp-audit.jsonl"
+        if IN_CHECKOUT
+        else STATE_HOME / "vcf-mcp-audit.jsonl",
+    )
 )
 
-DEFAULT_ENV_FILE = str(PROJECT_ROOT / ".env")
-DEFAULT_INSTALLER_CREDS = str(PROJECT_ROOT / "vcf-installer-credentials.txt")
+DEFAULT_ENV_FILE = str(_site_path(".env"))
+DEFAULT_INSTALLER_CREDS = str(_site_path("vcf-installer-credentials.txt"))
 
 # Appliance addresses are site-specific and are never checked in. They come
 # from VCF_MCP_<TARGET>_HOST, or from a hosts file (see hosts.example.json).
-HOSTS_FILE = Path(os.environ.get("VCF_MCP_HOSTS_FILE", PROJECT_ROOT / "hosts.json"))
+HOSTS_FILE = Path(os.environ.get("VCF_MCP_HOSTS_FILE", _site_path("hosts.json")))
 
 
 def _hosts_file_entries() -> dict[str, str]:

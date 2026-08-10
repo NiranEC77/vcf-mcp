@@ -1,6 +1,6 @@
 """Entry point.
 
-`vcf-mcp` with no arguments speaks MCP over stdio, which is how Claude Code
+`vcf-mcp` with no arguments speaks MCP over stdio, which is how an MCP client
 launches it. The two subcommands exist so the server can be checked from a
 terminal without an MCP client in the loop:
 

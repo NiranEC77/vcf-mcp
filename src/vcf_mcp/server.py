@@ -1,4 +1,4 @@
-"""MCP server exposing VMware Cloud Foundation to a Claude Code session.
+"""MCP server exposing VMware Cloud Foundation to any MCP client.
 
 Design note for anyone extending this: resist adding a tool per VCF feature.
 The estate has ~7,700 operations across six appliances; the value of this
