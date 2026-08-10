@@ -1,0 +1,21 @@
+# Never commit anything that could carry a credential or estate detail.
+.env
+.venv/
+logs/
+*.log
+
+# Site-local configuration: appliance addresses and machine-specific paths.
+hosts.json
+.mcp.json
+vcf-installer-credentials.txt
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Local tooling state.
+.claude/
+.ijfw/

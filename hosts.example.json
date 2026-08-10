@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to hosts.json and fill in your estate's addresses. hosts.json is gitignored. Any target may also be set with VCF_MCP_<TARGET>_HOST, which wins over this file. A target left blank is reported as unconfigured rather than called.",
+  "hosts": {
+    "sddc": "sddc-manager.example.local",
+    "installer": "vcf-installer.example.local",
+    "vcenter": "vcenter.example.local",
+    "nsx": "nsx-vip.example.local",
+    "ops": "vcf-ops.example.local",
+    "avi": "avi-controller.example.local",
+    "vsan-dp": "vcenter.example.local"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vcf": {
+      "command": "/absolute/path/to/vcf-mcp/.venv/bin/python",
+      "args": ["-m", "vcf_mcp"],
+      "env": {
+        "VCF_MCP_ENV_FILE": "/absolute/path/to/your/.env",
+        "VCF_MCP_HOSTS_FILE": "/absolute/path/to/vcf-mcp/hosts.json"
+      }
+    }
+  }
+}

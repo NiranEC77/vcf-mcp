@@ -1,0 +1,2 @@
+3949fc33339fc5ea1b77eadb258f1cf49aa88e26 2026-05-13 16:57:00 +0530
+source: https://github.com/vmware/vcf-api-specs

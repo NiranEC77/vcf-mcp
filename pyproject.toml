@@ -1,0 +1,20 @@
+[project]
+name = "vcf-mcp"
+version = "0.1.0"
+description = "MCP server for configuring and managing VMware Cloud Foundation 9.1"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=2.0.0",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+vcf-mcp = "vcf_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vcf_mcp"]
