@@ -29,6 +29,42 @@ _SUCCEEDED = {"SUCCESSFUL", "SUCCEEDED", "COMPLETED", "SUCCESS"}
 _FAILED = {"FAILED", "COMPLETED_WITH_FAILURE", "CANCELLED", "ERROR"}
 _TERMINAL = _SUCCEEDED | _FAILED
 
+# Collection keys used by the seven products. First match wins.
+_COLLECTION_KEYS = (
+    "elements",
+    "value",
+    "results",
+    "items",
+    "data",
+    "resources",
+    "vms",
+    "apps",
+    "resourceList",
+    "alerts",
+)
+
+
+def count_items(payload: Any) -> int | None:
+    """How many items a list-shaped API body contains.
+
+    Computed on the full payload, before _fit shortens it. Language models
+    cannot count a long JSON array; they guess. The door must say the number.
+    """
+    if isinstance(payload, list):
+        return len(payload)
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("result_count"), int):
+        return int(payload["result_count"])
+    pag = payload.get("pagination")
+    if isinstance(pag, dict) and isinstance(pag.get("total_results"), int):
+        return int(pag["total_results"])
+    for key in _COLLECTION_KEYS:
+        val = payload.get(key)
+        if isinstance(val, list):
+            return len(val)
+    return None
+
 
 def targets(check_reachability: bool = True) -> dict:
     """Every configured appliance, what it serves, and whether it answers."""
@@ -171,6 +207,12 @@ def call(
             for key in ("errorCode", "message", "remediationMessage", "referenceToken", "arguments")
             if key in payload
         } or payload
+
+    if result["ok"]:
+        n = count_items(payload)
+        if n is not None:
+            # Full length, even when body is later truncated.
+            result["count"] = n
 
     result["body"], truncated = _fit(payload, max_response_chars)
     if truncated:
@@ -535,6 +577,7 @@ def _fit(payload: Any, max_chars: int) -> tuple[Any, bool]:
             kept = kept[: len(kept) // 2]
         return {
             "_truncated": f"showing {len(kept)} of {len(payload)} items",
+            "count": len(payload),
             "items": [_clip(item, max_chars) for item in kept],
         }, True
 

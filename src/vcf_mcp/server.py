@@ -178,6 +178,10 @@ async def vcf_call(
     Long-running operations return HTTP 202 and a task id -- follow it with
     vcf_task rather than assuming success.
 
+    When the appliance returns a list, the result includes ``count``: the
+    full length, computed before any truncation. Say that number. Do not
+    count objects or fields in ``body``.
+
     Args:
         target: Appliance name from vcf_targets.
         method: GET, POST, PATCH, PUT or DELETE.

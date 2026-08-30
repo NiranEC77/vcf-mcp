@@ -105,6 +105,37 @@ def test_find_reports_near_misses():
 
 # --- response handling ---------------------------------------------------
 
+def test_count_items_bare_list():
+    """vCenter GET /api/vcenter/vm returns a JSON array. Three fields per
+    VM must not become the count."""
+    vms = [{"vm": f"vm-{i}", "name": f"n{i}", "power_state": "POWERED_ON"} for i in range(73)]
+    assert tools.count_items(vms) == 73
+
+
+def test_count_items_wrapped_collections():
+    assert tools.count_items({"elements": [1, 2, 3]}) == 3
+    assert tools.count_items({"value": [{"id": 1}]}) == 1
+    assert tools.count_items({"resourceList": [{}, {}]}) == 2
+    assert tools.count_items({"pagination": {"total_results": 40}, "results": [1]}) == 40
+
+
+def test_count_items_not_a_collection():
+    assert tools.count_items({"id": "vm-1", "name": "one"}) is None
+    assert tools.count_items("nope") is None
+    assert tools.count_items(None) is None
+    assert tools.count_items([]) == 0
+
+
+def test_count_survives_truncation():
+    """count is taken from the full payload. _fit may drop items."""
+    payload = [{"a": "b" * 80} for _ in range(40)]
+    assert tools.count_items(payload) == 40
+    fitted, truncated = tools._fit(payload, 1500)
+    assert truncated
+    shown = fitted["items"] if isinstance(fitted, dict) else fitted
+    assert len(shown) < 40
+
+
 def test_fit_shrinks_the_longest_list_whatever_it_is_called():
     payload = {"pageInfo": {"totalCount": 3}, "resourceList": [{"x": "y" * 200} for _ in range(30)]}
     fitted, truncated = tools._fit(payload, 2000)
