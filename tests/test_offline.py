@@ -117,6 +117,9 @@ def test_count_items_wrapped_collections():
     assert tools.count_items({"value": [{"id": 1}]}) == 1
     assert tools.count_items({"resourceList": [{}, {}]}) == 2
     assert tools.count_items({"pagination": {"total_results": 40}, "results": [1]}) == 40
+    assert tools.count_items({"datastores": [{}, {}]}) == 2
+    assert tools.count_items({"pageInfo": {"totalCount": 9}, "resourceList": [1]}) == 9
+    assert tools.count_items({"site": {"datastores": [{}, {}, {}]}}) == 3
 
 
 def test_count_items_not_a_collection():
@@ -137,12 +140,80 @@ def test_count_survives_truncation():
 
 
 def test_fit_shrinks_the_longest_list_whatever_it_is_called():
-    payload = {"pageInfo": {"totalCount": 3}, "resourceList": [{"x": "y" * 200} for _ in range(30)]}
+    payload = {
+        "pageInfo": {"totalCount": 80},
+        "resourceList": [
+            {"name": f"ds-{i}", "id": f"id-{i}", "type": "VSAN", "note": "z" * 80}
+            for i in range(80)
+        ],
+    }
     fitted, truncated = tools._fit(payload, 2000)
     assert truncated
-    assert len(fitted["resourceList"]) < 30
+    assert len(fitted["resourceList"]) < 80
     assert "_truncated" in fitted
     assert len(json.dumps(fitted)) <= 2000
+
+
+def test_fit_does_not_clip_a_list_item_to_an_opaque_string():
+    """A fat vSAN object must stay a small dict. A 20k clipped string hid count."""
+    payload = [
+        {"name": "vsan-ds", "type": "VSAN", "blob": "x" * 50_000, "nested": {"cfg": "y" * 10_000}}
+        for _ in range(3)
+    ]
+    fitted, truncated = tools._fit(payload, 4000)
+    assert truncated
+    items = fitted["items"] if isinstance(fitted, dict) else fitted
+    assert fitted["count"] == 3
+    assert items
+    assert all(isinstance(i, dict) for i in items)
+    assert all(not isinstance(i, str) for i in items)
+    assert items[0].get("name") == "vsan-ds"
+    assert "blob" not in items[0]
+    text = json.dumps(fitted)
+    assert "...<clipped>" not in text
+    assert len(text) <= 4000
+
+
+def test_call_leads_with_count_and_slims_items(monkeypatch):
+    def fake_request(*_a, **_k):
+        return (
+            200,
+            [
+                {
+                    "datastore": "datastore-15",
+                    "name": "mgmt-cluster-ds-vsan01",
+                    "type": "VSAN",
+                    "free_space": 1,
+                    "capacity": 2,
+                    "blob": "x" * 50_000,
+                }
+            ],
+            {},
+        )
+
+    monkeypatch.setattr(tools.client, "request", fake_request)
+    out = tools.call("vcenter", "GET", "/api/vcenter/datastore")
+    assert list(out)[0] == "count"
+    assert out["count"] == 1
+    assert out["summary"] == "1 items"
+    assert out["items"][0]["name"] == "mgmt-cluster-ds-vsan01"
+    assert "blob" not in out["items"][0]
+    assert "...<clipped>" not in json.dumps(out)
+
+
+def test_slim_item_keeps_datastore_identity():
+    fat = {
+        "datastore": "datastore-15",
+        "name": "mgmt-cluster-ds-vsan01",
+        "type": "VSAN",
+        "free_space": 1,
+        "capacity": 2,
+        "vsan_config": {"disk": "z" * 8000},
+    }
+    slim = tools.slim_item(fat)
+    assert slim["name"] == "mgmt-cluster-ds-vsan01"
+    assert slim["type"] == "VSAN"
+    assert "vsan_config" not in slim
 
 
 def test_fit_leaves_small_payloads_alone():

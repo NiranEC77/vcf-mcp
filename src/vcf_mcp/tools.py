@@ -18,6 +18,9 @@ from typing import Any
 from . import auth, client, config, specs
 
 DEFAULT_MAX_CHARS = 20_000
+# One list row must never fill the client window. Agent Builder (and the
+# model) then show a vSAN fragment and miss `count`.
+DEFAULT_ITEM_CHARS = 360
 
 # Where each product reports the progress of an asynchronous operation.
 _TASK_PATHS = {
@@ -41,7 +44,69 @@ _COLLECTION_KEYS = (
     "apps",
     "resourceList",
     "alerts",
+    "datastores",
+    "clusters",
+    "hosts",
+    "networks",
+    "folders",
 )
+
+# Identity / inventory fields. Fat vSAN blobs drop everything else.
+_SLIM_FIELDS = (
+    "name",
+    "id",
+    "datastore",
+    "type",
+    "free_space",
+    "capacity",
+    "vm",
+    "power_state",
+    "connection_state",
+    "host",
+    "fqdn",
+    "status",
+    "uuid",
+    "display_name",
+    "alertLevel",
+    "alertId",
+    "enabled",
+    "vtype",
+    "version",
+    "esxiVersion",
+    "isDefault",
+    "primaryDatastoreType",
+    "vipFqdn",
+    "cluster",
+    "folder",
+    "network",
+    "datacenter",
+    "accessible",
+    "maintenance_mode",
+    "thin_provisioning_supported",
+    "multiple_host_access",
+    "cpu_count",
+    "memory_size_MiB",
+)
+
+
+def collection_items(payload: Any) -> list | None:
+    """The list inside a list-shaped API body, or None."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    for key in _COLLECTION_KEYS:
+        val = payload.get(key)
+        if isinstance(val, list):
+            return val
+    for val in payload.values():
+        if not isinstance(val, dict):
+            continue
+        for key in _COLLECTION_KEYS:
+            inner = val.get(key)
+            if isinstance(inner, list):
+                return inner
+    return None
 
 
 def count_items(payload: Any) -> int | None:
@@ -59,11 +124,60 @@ def count_items(payload: Any) -> int | None:
     pag = payload.get("pagination")
     if isinstance(pag, dict) and isinstance(pag.get("total_results"), int):
         return int(pag["total_results"])
-    for key in _COLLECTION_KEYS:
-        val = payload.get(key)
-        if isinstance(val, list):
-            return len(val)
+    info = payload.get("pageInfo")
+    if isinstance(info, dict) and isinstance(info.get("totalCount"), int):
+        return int(info["totalCount"])
+    items = collection_items(payload)
+    if items is not None:
+        return len(items)
     return None
+
+
+def slim_item(item: Any, max_chars: int = DEFAULT_ITEM_CHARS) -> Any:
+    """Keep identity fields. Drop the nested blob that fills a tool window."""
+    if not isinstance(item, dict):
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            return item
+        return _clip(item, max_chars)
+    row: dict[str, Any] = {k: item[k] for k in _SLIM_FIELDS if k in item}
+    for key, val in item.items():
+        if key in row:
+            continue
+        if len(row) >= 12:
+            break
+        if isinstance(val, bool) or val is None or isinstance(val, (int, float)):
+            row[key] = val
+        elif isinstance(val, str) and len(val) <= 120:
+            row[key] = val
+    text = json.dumps(row, default=str)
+    if len(text) <= max_chars:
+        return row
+    # Drop the longest string fields until it fits. Never become a clipped blob.
+    strings = sorted(
+        (k for k, v in row.items() if isinstance(v, str)),
+        key=lambda k: len(str(row[k])),
+        reverse=True,
+    )
+    for key in strings:
+        row.pop(key, None)
+        if len(json.dumps(row, default=str)) <= max_chars:
+            return row
+    return {k: row[k] for k in list(row)[:6]}
+
+
+def _slim_payload(payload: Any) -> Any:
+    """Slim every collection in place. Scalars stay."""
+    if isinstance(payload, list):
+        return [slim_item(i) for i in payload]
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    for key, val in list(out.items()):
+        if isinstance(val, list) and val and any(isinstance(i, dict) for i in val):
+            out[key] = [slim_item(i) for i in val]
+        elif isinstance(val, dict):
+            out[key] = _slim_payload(val)
+    return out
 
 
 def targets(check_reachability: bool = True) -> dict:
@@ -184,13 +298,24 @@ def call(
         resolved, method, path, query=query, body=body, timeout=timeout
     )
 
-    result: dict[str, Any] = {
-        "target": target,
-        "method": method,
-        "path": path,
-        "status": status,
-        "ok": 200 <= status < 300,
-    }
+    ok = 200 <= status < 300
+    n = count_items(payload) if ok else None
+    # Count and slim items first so a client that shears the tail still
+    # sees the number. A 20k clipped vSAN string hid that field.
+    result: dict[str, Any] = {}
+    if n is not None:
+        result["count"] = n
+        result["summary"] = f"{n} items"
+
+    result.update(
+        {
+            "target": target,
+            "method": method,
+            "path": path,
+            "status": status,
+            "ok": ok,
+        }
+    )
     if known:
         result["operationId"] = known["op"]
     else:
@@ -200,7 +325,7 @@ def call(
             "looks wrong."
         )
 
-    if isinstance(payload, dict) and not result["ok"]:
+    if isinstance(payload, dict) and not ok:
         # VCF error objects carry a remediationMessage that is genuinely useful.
         result["error"] = {
             key: payload[key]
@@ -208,19 +333,25 @@ def call(
             if key in payload
         } or payload
 
-    if result["ok"]:
-        n = count_items(payload)
-        if n is not None:
-            # Full length, even when body is later truncated.
-            result["count"] = n
-
-    result["body"], truncated = _fit(payload, max_response_chars)
+    fitted_src = _slim_payload(payload) if ok else payload
+    result["body"], truncated = _fit(fitted_src, max_response_chars)
+    items = None
+    body = result["body"]
+    if isinstance(body, list):
+        items = body
+    elif isinstance(body, dict) and isinstance(body.get("items"), list):
+        items = body["items"]
+    elif n is not None:
+        items = collection_items(fitted_src)
+    if items is not None:
+        result["items"] = items
+        result["showing"] = len(items)
     if truncated:
         result["truncated"] = True
         result["truncation_hint"] = (
-            "Response was shortened to fit. Narrow it with query parameters "
-            "(most VCF list endpoints support pageSize/pageNumber or filters), "
-            "or raise max_response_chars."
+            "Response was shortened to fit. Read count for the full length. "
+            "Narrow it with query parameters (most VCF list endpoints support "
+            "pageSize/pageNumber or filters), or raise max_response_chars."
         )
 
     task_id = _task_id(status, payload, headers)
@@ -555,7 +686,7 @@ def _fit(payload: Any, max_chars: int) -> tuple[Any, bool]:
         lists = [(k, v) for k, v in payload.items() if isinstance(v, list) and v]
         if lists:
             key, items = max(lists, key=lambda pair: len(pair[1]))
-            kept = list(items)
+            kept = [slim_item(i) for i in items]
             while len(kept) > 1 and (
                 len(json.dumps({**payload, key: kept}, default=str)) > max_chars
             ):
@@ -563,24 +694,31 @@ def _fit(payload: Any, max_chars: int) -> tuple[Any, bool]:
             shrunk = {**payload, key: kept}
             if len(kept) < len(items):
                 shrunk["_truncated"] = f"showing {len(kept)} of {len(items)} in '{key}'"
+            else:
+                shrunk["_truncated"] = f"slimmed {len(kept)} in '{key}'"
             if len(json.dumps(shrunk, default=str)) > max_chars:
-                shrunk["_truncated"] = (
-                    f"'{key}' has {len(items)} items and even one exceeds "
-                    f"max_response_chars={max_chars}; showing it trimmed"
-                )
-                shrunk[key] = [_clip(kept[0], max_chars)]
+                one = slim_item(kept[0], max_chars=min(DEFAULT_ITEM_CHARS, max(80, max_chars // 4)))
+                shrunk = {
+                    key: [one],
+                    "count": len(items),
+                    "_truncated": (
+                        f"'{key}' has {len(items)} items; showing 1 slimmed row"
+                    ),
+                }
             return shrunk, True
 
     if isinstance(payload, list):
-        kept = list(payload)
+        kept = [slim_item(item) for item in payload]
         while len(kept) > 1 and len(json.dumps(kept, default=str)) > max_chars:
             kept = kept[: len(kept) // 2]
         return {
             "_truncated": f"showing {len(kept)} of {len(payload)} items",
             "count": len(payload),
-            "items": [_clip(item, max_chars) for item in kept],
+            "items": kept,
         }, True
 
+    if isinstance(payload, dict):
+        return slim_item(payload, max_chars=min(max_chars, DEFAULT_ITEM_CHARS * 4)), True
     return _clip(payload, max_chars), True
 
 

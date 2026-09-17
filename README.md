@@ -251,7 +251,7 @@ client that gates writes can do so without a hardcoded tool list.
 | `vcf_search_api` | `query`, `target?`, `method?`, `limit=25`, `include_deprecated=false` | Ranked operations with method, full path, summary, operationId |
 | `vcf_describe_api` | `operation_id?` or `method`+`path`, `target?`, `depth=3`, `max_properties=60` | Path/query parameters, resolved request body schema with required fields, response schemas |
 | `vcf_validate` | `target`, `path`, `body?`, `wait_seconds=120` | `validated` true/false plus each failed check — executes nothing |
-| `vcf_call` | `target`, `method`, `path`, `query?`, `body?`, `timeout?`, `max_response_chars=20000` | Status, response body, and `count` when the body is a list (full length, even if truncated); task id for async operations |
+| `vcf_call` | `target`, `method`, `path`, `query?`, `body?`, `timeout?`, `max_response_chars=20000` | `count` + `summary` + slim `items` when the body is a list (full length, even if truncated); task id for async operations |
 | `vcf_task` | `target`, `task_id`, `wait_seconds=0`, `poll_interval=5.0` | Task status and, on failure, which subtask failed and why |
 | `vcf_inventory` | `targets?`, `per_section_limit=25` | Domains, clusters, hosts, gateways and alerts in one snapshot |
 | `vcf_audit` | `limit=50` | Recent mutating calls made through this server |
