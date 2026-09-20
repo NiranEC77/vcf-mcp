@@ -4,6 +4,8 @@ Terse, dated. Component — change — verification.
 
 ## 2026-09-20
 
+- tools: **four domain jobs** — `vcf_vms` (list/get/start/stop/reset/suspend), `vcf_networks`, `vcf_storage`, `vcf_metrics`; generic search/call stay; a grant can name one job or full access — verified `pytest tests/test_offline.py -q`
+- version **0.3.0**
 - http: **Streamable HTTP mode in the package** (`$PORT` or `vcf-mcp serve-http`); `pip install "vcf-mcp[http]"`; refuses to start with no bearer; `/health`; RFC 9728 metadata; `WWW-Authenticate` on 401 — verified local smoke: health 200, metadata 200, no bearer 401, junk JWT 401, static read token initialize 200
 - http: **OAuth resource server** (`oauth_bearer.py`): issuer JWKS via RFC 8414 discovery or `VCF_MCP_OAUTH_JWKS_URI`; `aud` must name `VCF_MCP_RESOURCE_URL` or `VCF_MCP_OAUTH_AUDIENCES`; tool-name and `tools` scopes decide read/admin — verified `pytest tests/test_http_auth.py -q`
 - http: **gateway job scopes are a grant** — a token carrying `urn:iam:agent:intent:<job>` (prefix `VCF_MCP_OAUTH_INTENT_PREFIX`) is admin; the gateway already mapped tool → job → policy and strips the rest; the server no longer re-checks tool names and 401s an intent-only token — verified `pytest tests/ -q` 58 passed

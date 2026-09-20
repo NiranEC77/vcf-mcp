@@ -302,8 +302,12 @@ log when the disk is ephemeral.
 | `vcf_task` | `target`, `task_id`, `wait_seconds=0`, `poll_interval=5.0` | Task status and, on failure, which subtask failed and why |
 | `vcf_inventory` | `targets?`, `per_section_limit=25` | Domains, clusters, hosts, gateways and alerts in one snapshot |
 | `vcf_audit` | `limit=50` | Recent mutating calls made through this server |
+| `vcf_vms` | `action=list`, `vm?` | Manage VMs: list, get, power, start, stop, reset, suspend |
+| `vcf_networks` | `action=list` | vCenter networks plus NSX segments and gateways, with a count |
+| `vcf_storage` | `action=list` | vCenter datastores and the count |
+| `vcf_metrics` | `action=alerts` | VCF Operations alerts and the count |
 
-`vcf_call` is annotated as destructive; every other tool is annotated read-only.
+`vcf_call` and `vcf_vms` are annotated as destructive; the rest are read-only. A grant can name one domain job, or full access.
 
 Typical sequence for a change: `vcf_search_api` → `vcf_describe_api` →
 `vcf_validate` → `vcf_call` → `vcf_task`.

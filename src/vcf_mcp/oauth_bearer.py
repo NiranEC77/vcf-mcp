@@ -57,8 +57,11 @@ VCF_READ_SCOPES = (
     "vcf_validate",
     "vcf_inventory",
     "vcf_audit",
+    "vcf_networks",
+    "vcf_storage",
+    "vcf_metrics",
 )
-VCF_WRITE_SCOPES = ("vcf_call", "vcf_task")
+VCF_WRITE_SCOPES = ("vcf_call", "vcf_task", "vcf_vms")
 
 _jwks_lock = threading.Lock()
 _jwks_cache: tuple[float, dict[str, Any]] | None = None

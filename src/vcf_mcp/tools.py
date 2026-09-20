@@ -1,13 +1,13 @@
 """Tool implementations.
 
-Eight tools, deliberately few: a registry of what can be talked to, a way to
-find an operation, a way to read its signature, a way to dry-run a spec, a
-way to call it, a way to follow the long-running task most writes return, a
-curated estate snapshot, and the audit trail.
+Generic tools stay few: registry, search, describe, dry-run, call, follow a
+task, inventory, audit. Those cover thousands of operations at a fixed
+context cost.
 
-That set covers all 7,698 indexed operations at a fixed context cost, which
-is the whole point -- one MCP tool per endpoint would not fit in a context
-window, let alone leave room for the work.
+Domain tools sit next to that set so a grant can name one job. VM
+management, network, storage, and metrics are four jobs. Full access is
+all of them plus the generic tools. A grant that only has VM management
+cannot answer a network question.
 """
 from __future__ import annotations
 
@@ -475,6 +475,92 @@ def inventory(targets_wanted: list[str] | None = None, per_section_limit: int = 
                 section[label] = {"error": f"{type(exc).__name__}: {exc}"}
         out[name] = section
     return out
+
+
+_VM_POWER = frozenset({"start", "stop", "reset", "suspend"})
+
+
+def vms(action: str = "list", vm: str | None = None) -> dict:
+    """Manage virtual machines on vCenter.
+
+    list / count — every VM and the count.
+    get — one VM.
+    power — current power state.
+    start / stop / reset / suspend — change power. These take effect now.
+    """
+    action = (action or "list").strip().lower()
+    if action in {"list", "count"}:
+        return call("vcenter", "GET", "/api/vcenter/vm")
+    ident = (vm or "").strip()
+    if not ident:
+        return {
+            "ok": False,
+            "error": "need a VM id",
+            "hint": "Call list first. Then pass vm= from that list.",
+        }
+    if action == "get":
+        return call("vcenter", "GET", f"/api/vcenter/vm/{ident}")
+    if action == "power":
+        return call("vcenter", "GET", f"/api/vcenter/vm/{ident}/power")
+    if action in _VM_POWER:
+        return call("vcenter", "POST", f"/api/vcenter/vm/{ident}/power?action={action}")
+    return {
+        "ok": False,
+        "error": f"unknown action '{action}'",
+        "hint": "list, get, power, start, stop, reset, suspend",
+    }
+
+
+def networks(action: str = "list") -> dict:
+    """List networks: vCenter port groups and NSX segments and gateways."""
+    action = (action or "list").strip().lower()
+    if action not in {"list", "count"}:
+        return {
+            "ok": False,
+            "error": f"unknown action '{action}'",
+            "hint": "list",
+        }
+    sections = {
+        "vcenter_networks": call("vcenter", "GET", "/api/vcenter/network"),
+        "segments": call("nsx", "GET", "/policy/api/v1/infra/segments"),
+        "tier0_gateways": call("nsx", "GET", "/policy/api/v1/infra/tier-0s"),
+        "tier1_gateways": call("nsx", "GET", "/policy/api/v1/infra/tier-1s"),
+    }
+    total = 0
+    for row in sections.values():
+        if isinstance(row, dict) and isinstance(row.get("count"), int):
+            total += row["count"]
+    return {
+        "ok": True,
+        "action": action,
+        "count": total,
+        "summary": f"{total} networks",
+        "sections": sections,
+    }
+
+
+def storage(action: str = "list") -> dict:
+    """List datastores on vCenter."""
+    action = (action or "list").strip().lower()
+    if action not in {"list", "count"}:
+        return {
+            "ok": False,
+            "error": f"unknown action '{action}'",
+            "hint": "list",
+        }
+    return call("vcenter", "GET", "/api/vcenter/datastore")
+
+
+def metrics(action: str = "alerts") -> dict:
+    """Collect live metrics from VCF Operations. Alerts first."""
+    action = (action or "alerts").strip().lower()
+    if action not in {"alerts", "list", "collect"}:
+        return {
+            "ok": False,
+            "error": f"unknown action '{action}'",
+            "hint": "alerts",
+        }
+    return call("ops", "GET", "/suite-api/api/alerts", query={"pageSize": 200})
 
 
 def _summarise(payload: Any, fields: tuple[str, ...] | None, limit: int) -> Any:

@@ -381,3 +381,71 @@ def test_unconfigured_target_names_what_to_set():
         config.require_host(blank)
     assert "VCF_MCP_OPS_HOST" in str(excinfo.value)
     assert "hosts.example.json" in str(excinfo.value)
+
+
+def test_vms_list_uses_vcenter_vm(monkeypatch):
+    seen = []
+
+    def fake_call(target, method, path, **_k):
+        seen.append((target, method, path))
+        return {"count": 2, "items": [{"vm": "vm-1"}, {"vm": "vm-2"}]}
+
+    monkeypatch.setattr(tools, "call", fake_call)
+    out = tools.vms("list")
+    assert seen == [("vcenter", "GET", "/api/vcenter/vm")]
+    assert out["count"] == 2
+
+
+def test_vms_start_posts_power(monkeypatch):
+    seen = []
+
+    def fake_call(target, method, path, **_k):
+        seen.append((target, method, path))
+        return {"ok": True, "status": 200}
+
+    monkeypatch.setattr(tools, "call", fake_call)
+    out = tools.vms("start", vm="vm-9")
+    assert seen == [("vcenter", "POST", "/api/vcenter/vm/vm-9/power?action=start")]
+    assert out["ok"] is True
+
+
+def test_vms_needs_id_for_power():
+    out = tools.vms("stop")
+    assert out["ok"] is False
+    assert "VM id" in out["error"]
+
+
+def test_networks_sums_sections(monkeypatch):
+    def fake_call(target, method, path, **_k):
+        if "network" in path:
+            return {"count": 3}
+        if "segments" in path:
+            return {"count": 4}
+        return {"count": 1}
+
+    monkeypatch.setattr(tools, "call", fake_call)
+    out = tools.networks("list")
+    assert out["ok"] is True
+    assert out["count"] == 9
+    assert "sections" in out
+
+
+def test_storage_lists_datastores(monkeypatch):
+    def fake_call(target, method, path, **_k):
+        assert (target, method, path) == ("vcenter", "GET", "/api/vcenter/datastore")
+        return {"count": 1, "items": [{"name": "vsan"}]}
+
+    monkeypatch.setattr(tools, "call", fake_call)
+    out = tools.storage("list")
+    assert out["count"] == 1
+
+
+def test_metrics_lists_alerts(monkeypatch):
+    def fake_call(target, method, path, query=None, **_k):
+        assert (target, method, path) == ("ops", "GET", "/suite-api/api/alerts")
+        assert query == {"pageSize": 200}
+        return {"count": 5}
+
+    monkeypatch.setattr(tools, "call", fake_call)
+    out = tools.metrics("alerts")
+    assert out["count"] == 5

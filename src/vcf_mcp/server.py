@@ -32,13 +32,13 @@ mcp = _Server(
     "vcf",
     version=__version__,
     instructions=(
-        "Configure and manage a VMware Cloud Foundation 9.1 estate. Start with "
-        "vcf_targets to see the appliances, or vcf_inventory for a snapshot of "
-        "what exists. To do anything specific: vcf_search_api to find the "
-        "operation, vcf_describe_api to read its schema, vcf_validate to dry-run a spec where a /validations twin exists, then vcf_call to run it. "
-        "Writes take effect immediately on live infrastructure and some are "
-        "irreversible, so describe before you call, and follow any returned "
-        "task id with vcf_task rather than assuming success."
+        "Configure and manage a VMware Cloud Foundation 9.1 estate. Domain "
+        "jobs: vcf_vms (list, get, start, stop, reset, suspend), "
+        "vcf_networks, vcf_storage, vcf_metrics. A grant can name one of "
+        "those jobs, or full access. Start with vcf_targets or vcf_inventory "
+        "for a snapshot. For anything else: vcf_search_api, vcf_describe_api, "
+        "vcf_validate, then vcf_call. Writes take effect immediately. Follow "
+        "a returned task id with vcf_task."
     ),
 )
 
@@ -301,6 +301,45 @@ async def vcf_audit(limit: int = 50) -> Any:
     return await _run(tools.audit, limit=limit)
 
 
+@mcp.tool(**_hints(destructive=True))
+async def vcf_vms(action: str = "list", vm: str | None = None) -> Any:
+    """Manage virtual machines.
+
+    list or count: every VM and the number. get: one VM. power: current
+    power state. start, stop, reset, suspend: change power now. Pass vm
+    from the list. This is VM work, not networks or storage.
+    """
+    return await _run(tools.vms, action=action, vm=vm)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_networks(action: str = "list") -> Any:
+    """List networks: vCenter port groups and NSX segments and gateways.
+
+    This is network work, not VMs. Use list. The result leads with count.
+    """
+    return await _run(tools.networks, action=action)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_storage(action: str = "list") -> Any:
+    """List datastores on vCenter.
+
+    This is storage work, not VMs. Use list. The result leads with count.
+    """
+    return await _run(tools.storage, action=action)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_metrics(action: str = "alerts") -> Any:
+    """Collect live metrics from VCF Operations.
+
+    alerts: current alerts and the count. This is metrics, not VM or
+    network management.
+    """
+    return await _run(tools.metrics, action=action)
+
+
 # ---------------------------------------------------------------------------
 # Streamable HTTP. Stdio stays the default for desktop clients; HTTP is for a
 # hosted copy (a PaaS app, a container) that agents reach over the network.
@@ -317,8 +356,18 @@ from . import oauth_bearer  # noqa: E402
 # may only GET/HEAD. Stdio never sets it, so the default applies.
 CAPABILITY: ContextVar[str] = ContextVar("capability", default="admin")
 
-READ_TOOLS = ("vcf_targets", "vcf_search_api", "vcf_describe_api", "vcf_validate", "vcf_inventory", "vcf_audit")
-WRITE_TOOLS = ("vcf_call", "vcf_task")
+READ_TOOLS = (
+    "vcf_targets",
+    "vcf_search_api",
+    "vcf_describe_api",
+    "vcf_validate",
+    "vcf_inventory",
+    "vcf_audit",
+    "vcf_networks",
+    "vcf_storage",
+    "vcf_metrics",
+)
+WRITE_TOOLS = ("vcf_call", "vcf_task", "vcf_vms")
 
 
 def _default_resource_url() -> str:
