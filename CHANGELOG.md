@@ -4,6 +4,8 @@ Terse, dated. Component — change — verification.
 
 ## 2026-09-20
 
+- tools: **each domain job is a set of tools** — VM management has list/get/power/start/stop/reset/suspend; network has networks/segments/gateways; storage has list/get/policy; metrics has alerts/snapshot; not one tool per job — verified `pytest tests/ -q`
+- version **0.3.1**
 - tools: **four domain jobs** — `vcf_vms` (list/get/start/stop/reset/suspend), `vcf_networks`, `vcf_storage`, `vcf_metrics`; generic search/call stay; a grant can name one job or full access — verified `pytest tests/test_offline.py -q`
 - version **0.3.0**
 - http: **Streamable HTTP mode in the package** (`$PORT` or `vcf-mcp serve-http`); `pip install "vcf-mcp[http]"`; refuses to start with no bearer; `/health`; RFC 9728 metadata; `WWW-Authenticate` on 401 — verified local smoke: health 200, metadata 200, no bearer 401, junk JWT 401, static read token initialize 200

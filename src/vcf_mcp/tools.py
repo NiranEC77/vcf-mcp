@@ -477,90 +477,120 @@ def inventory(targets_wanted: list[str] | None = None, per_section_limit: int = 
     return out
 
 
-_VM_POWER = frozenset({"start", "stop", "reset", "suspend"})
-
-
-def vms(action: str = "list", vm: str | None = None) -> dict:
-    """Manage virtual machines on vCenter.
-
-    list / count — every VM and the count.
-    get — one VM.
-    power — current power state.
-    start / stop / reset / suspend — change power. These take effect now.
-    """
-    action = (action or "list").strip().lower()
-    if action in {"list", "count"}:
-        return call("vcenter", "GET", "/api/vcenter/vm")
-    ident = (vm or "").strip()
-    if not ident:
-        return {
-            "ok": False,
-            "error": "need a VM id",
-            "hint": "Call list first. Then pass vm= from that list.",
-        }
-    if action == "get":
-        return call("vcenter", "GET", f"/api/vcenter/vm/{ident}")
-    if action == "power":
-        return call("vcenter", "GET", f"/api/vcenter/vm/{ident}/power")
-    if action in _VM_POWER:
-        return call("vcenter", "POST", f"/api/vcenter/vm/{ident}/power?action={action}")
-    return {
+def _need_id(value: str | None, kind: str, list_tool: str) -> tuple[str, dict | None]:
+    ident = (value or "").strip()
+    if ident:
+        return ident, None
+    return "", {
         "ok": False,
-        "error": f"unknown action '{action}'",
-        "hint": "list, get, power, start, stop, reset, suspend",
+        "error": f"need a {kind} id",
+        "hint": f"Call {list_tool} first. Then pass that id.",
     }
 
 
-def networks(action: str = "list") -> dict:
-    """List networks: vCenter port groups and NSX segments and gateways."""
-    action = (action or "list").strip().lower()
-    if action not in {"list", "count"}:
-        return {
-            "ok": False,
-            "error": f"unknown action '{action}'",
-            "hint": "list",
-        }
-    sections = {
-        "vcenter_networks": call("vcenter", "GET", "/api/vcenter/network"),
-        "segments": call("nsx", "GET", "/policy/api/v1/infra/segments"),
-        "tier0_gateways": call("nsx", "GET", "/policy/api/v1/infra/tier-0s"),
-        "tier1_gateways": call("nsx", "GET", "/policy/api/v1/infra/tier-1s"),
-    }
-    total = 0
-    for row in sections.values():
-        if isinstance(row, dict) and isinstance(row.get("count"), int):
-            total += row["count"]
+def list_vms() -> dict:
+    """Every virtual machine on vCenter, with the count."""
+    return call("vcenter", "GET", "/api/vcenter/vm")
+
+
+def get_vm(vm: str) -> dict:
+    """One virtual machine: CPU, memory, and the rest of the record."""
+    ident, err = _need_id(vm, "VM", "vcf_list_vms")
+    if err:
+        return err
+    return call("vcenter", "GET", f"/api/vcenter/vm/{ident}")
+
+
+def vm_power_state(vm: str) -> dict:
+    """Current power state of one virtual machine."""
+    ident, err = _need_id(vm, "VM", "vcf_list_vms")
+    if err:
+        return err
+    return call("vcenter", "GET", f"/api/vcenter/vm/{ident}/power")
+
+
+def _vm_power(vm: str, action: str) -> dict:
+    ident, err = _need_id(vm, "VM", "vcf_list_vms")
+    if err:
+        return err
+    return call("vcenter", "POST", f"/api/vcenter/vm/{ident}/power?action={action}")
+
+
+def start_vm(vm: str) -> dict:
+    """Power on one virtual machine. Takes effect now."""
+    return _vm_power(vm, "start")
+
+
+def stop_vm(vm: str) -> dict:
+    """Power off one virtual machine. Takes effect now."""
+    return _vm_power(vm, "stop")
+
+
+def reset_vm(vm: str) -> dict:
+    """Reset one virtual machine. Takes effect now."""
+    return _vm_power(vm, "reset")
+
+
+def suspend_vm(vm: str) -> dict:
+    """Suspend one virtual machine. Takes effect now."""
+    return _vm_power(vm, "suspend")
+
+
+def list_networks() -> dict:
+    """vCenter port groups and other vCenter networks, with the count."""
+    return call("vcenter", "GET", "/api/vcenter/network")
+
+
+def list_segments() -> dict:
+    """NSX segments, with the count."""
+    return call("nsx", "GET", "/policy/api/v1/infra/segments")
+
+
+def list_gateways() -> dict:
+    """NSX tier-0 and tier-1 gateways, with counts."""
+    tier0 = call("nsx", "GET", "/policy/api/v1/infra/tier-0s")
+    tier1 = call("nsx", "GET", "/policy/api/v1/infra/tier-1s")
+    n0 = tier0.get("count") if isinstance(tier0, dict) else None
+    n1 = tier1.get("count") if isinstance(tier1, dict) else None
+    total = (n0 or 0) + (n1 or 0)
     return {
         "ok": True,
-        "action": action,
         "count": total,
-        "summary": f"{total} networks",
-        "sections": sections,
+        "summary": f"{total} gateways",
+        "tier0_gateways": tier0,
+        "tier1_gateways": tier1,
     }
 
 
-def storage(action: str = "list") -> dict:
-    """List datastores on vCenter."""
-    action = (action or "list").strip().lower()
-    if action not in {"list", "count"}:
-        return {
-            "ok": False,
-            "error": f"unknown action '{action}'",
-            "hint": "list",
-        }
+def list_datastores() -> dict:
+    """vCenter datastores, with the count."""
     return call("vcenter", "GET", "/api/vcenter/datastore")
 
 
-def metrics(action: str = "alerts") -> dict:
-    """Collect live metrics from VCF Operations. Alerts first."""
-    action = (action or "alerts").strip().lower()
-    if action not in {"alerts", "list", "collect"}:
-        return {
-            "ok": False,
-            "error": f"unknown action '{action}'",
-            "hint": "alerts",
-        }
+def get_datastore(datastore: str) -> dict:
+    """One datastore: type, free space, capacity."""
+    ident, err = _need_id(datastore, "datastore", "vcf_list_datastores")
+    if err:
+        return err
+    return call("vcenter", "GET", f"/api/vcenter/datastore/{ident}")
+
+
+def datastore_policy(datastore: str) -> dict:
+    """Default storage policy on one datastore."""
+    ident, err = _need_id(datastore, "datastore", "vcf_list_datastores")
+    if err:
+        return err
+    return call("vcenter", "GET", f"/api/vcenter/datastore/{ident}/default-policy")
+
+
+def list_alerts() -> dict:
+    """Current VCF Operations alerts, with the count."""
     return call("ops", "GET", "/suite-api/api/alerts", query={"pageSize": 200})
+
+
+def ops_snapshot() -> dict:
+    """One Operations snapshot: active alerts from the inventory recipe."""
+    return inventory(targets_wanted=["ops"])
 
 
 def _summarise(payload: Any, fields: tuple[str, ...] | None, limit: int) -> Any:

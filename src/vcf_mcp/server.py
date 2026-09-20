@@ -33,12 +33,13 @@ mcp = _Server(
     version=__version__,
     instructions=(
         "Configure and manage a VMware Cloud Foundation 9.1 estate. Domain "
-        "jobs: vcf_vms (list, get, start, stop, reset, suspend), "
-        "vcf_networks, vcf_storage, vcf_metrics. A grant can name one of "
-        "those jobs, or full access. Start with vcf_targets or vcf_inventory "
-        "for a snapshot. For anything else: vcf_search_api, vcf_describe_api, "
-        "vcf_validate, then vcf_call. Writes take effect immediately. Follow "
-        "a returned task id with vcf_task."
+        "jobs group tools: VM management (list, get, power state, start, "
+        "stop, reset, suspend), network management (networks, segments, "
+        "gateways), storage management (list, get, default policy), metrics "
+        "(alerts, Operations snapshot). A grant names one job, or full "
+        "access. Start with vcf_targets or vcf_inventory. For anything else: "
+        "vcf_search_api, vcf_describe_api, vcf_validate, then vcf_call. "
+        "Writes take effect immediately. Follow a task id with vcf_task."
     ),
 )
 
@@ -301,43 +302,94 @@ async def vcf_audit(limit: int = 50) -> Any:
     return await _run(tools.audit, limit=limit)
 
 
+@mcp.tool(**_hints(read_only=True))
+async def vcf_list_vms() -> Any:
+    """List every virtual machine and the count. VM management."""
+    return await _run(tools.list_vms)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_get_vm(vm: str) -> Any:
+    """Get one virtual machine. Pass vm from vcf_list_vms. VM management."""
+    return await _run(tools.get_vm, vm=vm)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_vm_power_state(vm: str) -> Any:
+    """Current power state of one virtual machine. VM management."""
+    return await _run(tools.vm_power_state, vm=vm)
+
+
 @mcp.tool(**_hints(destructive=True))
-async def vcf_vms(action: str = "list", vm: str | None = None) -> Any:
-    """Manage virtual machines.
-
-    list or count: every VM and the number. get: one VM. power: current
-    power state. start, stop, reset, suspend: change power now. Pass vm
-    from the list. This is VM work, not networks or storage.
-    """
-    return await _run(tools.vms, action=action, vm=vm)
+async def vcf_start_vm(vm: str) -> Any:
+    """Power on one virtual machine. Takes effect now. VM management."""
+    return await _run(tools.start_vm, vm=vm)
 
 
-@mcp.tool(**_hints(read_only=True))
-async def vcf_networks(action: str = "list") -> Any:
-    """List networks: vCenter port groups and NSX segments and gateways.
-
-    This is network work, not VMs. Use list. The result leads with count.
-    """
-    return await _run(tools.networks, action=action)
+@mcp.tool(**_hints(destructive=True))
+async def vcf_stop_vm(vm: str) -> Any:
+    """Power off one virtual machine. Takes effect now. VM management."""
+    return await _run(tools.stop_vm, vm=vm)
 
 
-@mcp.tool(**_hints(read_only=True))
-async def vcf_storage(action: str = "list") -> Any:
-    """List datastores on vCenter.
+@mcp.tool(**_hints(destructive=True))
+async def vcf_reset_vm(vm: str) -> Any:
+    """Reset one virtual machine. Takes effect now. VM management."""
+    return await _run(tools.reset_vm, vm=vm)
 
-    This is storage work, not VMs. Use list. The result leads with count.
-    """
-    return await _run(tools.storage, action=action)
+
+@mcp.tool(**_hints(destructive=True))
+async def vcf_suspend_vm(vm: str) -> Any:
+    """Suspend one virtual machine. Takes effect now. VM management."""
+    return await _run(tools.suspend_vm, vm=vm)
 
 
 @mcp.tool(**_hints(read_only=True))
-async def vcf_metrics(action: str = "alerts") -> Any:
-    """Collect live metrics from VCF Operations.
+async def vcf_list_networks() -> Any:
+    """List vCenter networks and the count. Network management."""
+    return await _run(tools.list_networks)
 
-    alerts: current alerts and the count. This is metrics, not VM or
-    network management.
-    """
-    return await _run(tools.metrics, action=action)
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_list_segments() -> Any:
+    """List NSX segments and the count. Network management."""
+    return await _run(tools.list_segments)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_list_gateways() -> Any:
+    """List NSX tier-0 and tier-1 gateways. Network management."""
+    return await _run(tools.list_gateways)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_list_datastores() -> Any:
+    """List datastores and the count. Storage management."""
+    return await _run(tools.list_datastores)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_get_datastore(datastore: str) -> Any:
+    """Get one datastore. Pass id from vcf_list_datastores. Storage management."""
+    return await _run(tools.get_datastore, datastore=datastore)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_datastore_policy(datastore: str) -> Any:
+    """Default storage policy on one datastore. Storage management."""
+    return await _run(tools.datastore_policy, datastore=datastore)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_list_alerts() -> Any:
+    """List current VCF Operations alerts and the count. Metrics."""
+    return await _run(tools.list_alerts)
+
+
+@mcp.tool(**_hints(read_only=True))
+async def vcf_ops_snapshot() -> Any:
+    """One Operations snapshot of active alerts. Metrics."""
+    return await _run(tools.ops_snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -363,11 +415,26 @@ READ_TOOLS = (
     "vcf_validate",
     "vcf_inventory",
     "vcf_audit",
-    "vcf_networks",
-    "vcf_storage",
-    "vcf_metrics",
+    "vcf_list_vms",
+    "vcf_get_vm",
+    "vcf_vm_power_state",
+    "vcf_list_networks",
+    "vcf_list_segments",
+    "vcf_list_gateways",
+    "vcf_list_datastores",
+    "vcf_get_datastore",
+    "vcf_datastore_policy",
+    "vcf_list_alerts",
+    "vcf_ops_snapshot",
 )
-WRITE_TOOLS = ("vcf_call", "vcf_task", "vcf_vms")
+WRITE_TOOLS = (
+    "vcf_call",
+    "vcf_task",
+    "vcf_start_vm",
+    "vcf_stop_vm",
+    "vcf_reset_vm",
+    "vcf_suspend_vm",
+)
 
 
 def _default_resource_url() -> str:

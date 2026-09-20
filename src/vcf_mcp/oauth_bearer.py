@@ -57,11 +57,26 @@ VCF_READ_SCOPES = (
     "vcf_validate",
     "vcf_inventory",
     "vcf_audit",
-    "vcf_networks",
-    "vcf_storage",
-    "vcf_metrics",
+    "vcf_list_vms",
+    "vcf_get_vm",
+    "vcf_vm_power_state",
+    "vcf_list_networks",
+    "vcf_list_segments",
+    "vcf_list_gateways",
+    "vcf_list_datastores",
+    "vcf_get_datastore",
+    "vcf_datastore_policy",
+    "vcf_list_alerts",
+    "vcf_ops_snapshot",
 )
-VCF_WRITE_SCOPES = ("vcf_call", "vcf_task", "vcf_vms")
+VCF_WRITE_SCOPES = (
+    "vcf_call",
+    "vcf_task",
+    "vcf_start_vm",
+    "vcf_stop_vm",
+    "vcf_reset_vm",
+    "vcf_suspend_vm",
+)
 
 _jwks_lock = threading.Lock()
 _jwks_cache: tuple[float, dict[str, Any]] | None = None

@@ -383,7 +383,7 @@ def test_unconfigured_target_names_what_to_set():
     assert "hosts.example.json" in str(excinfo.value)
 
 
-def test_vms_list_uses_vcenter_vm(monkeypatch):
+def test_list_vms_uses_vcenter_vm(monkeypatch):
     seen = []
 
     def fake_call(target, method, path, **_k):
@@ -391,12 +391,12 @@ def test_vms_list_uses_vcenter_vm(monkeypatch):
         return {"count": 2, "items": [{"vm": "vm-1"}, {"vm": "vm-2"}]}
 
     monkeypatch.setattr(tools, "call", fake_call)
-    out = tools.vms("list")
+    out = tools.list_vms()
     assert seen == [("vcenter", "GET", "/api/vcenter/vm")]
     assert out["count"] == 2
 
 
-def test_vms_start_posts_power(monkeypatch):
+def test_start_vm_posts_power(monkeypatch):
     seen = []
 
     def fake_call(target, method, path, **_k):
@@ -404,48 +404,45 @@ def test_vms_start_posts_power(monkeypatch):
         return {"ok": True, "status": 200}
 
     monkeypatch.setattr(tools, "call", fake_call)
-    out = tools.vms("start", vm="vm-9")
+    out = tools.start_vm("vm-9")
     assert seen == [("vcenter", "POST", "/api/vcenter/vm/vm-9/power?action=start")]
     assert out["ok"] is True
 
 
-def test_vms_needs_id_for_power():
-    out = tools.vms("stop")
+def test_stop_vm_needs_id():
+    out = tools.stop_vm("")
     assert out["ok"] is False
     assert "VM id" in out["error"]
 
 
-def test_networks_sums_sections(monkeypatch):
+def test_list_gateways_sums_tiers(monkeypatch):
     def fake_call(target, method, path, **_k):
-        if "network" in path:
-            return {"count": 3}
-        if "segments" in path:
-            return {"count": 4}
-        return {"count": 1}
+        if "tier-0" in path:
+            return {"count": 2}
+        return {"count": 3}
 
     monkeypatch.setattr(tools, "call", fake_call)
-    out = tools.networks("list")
+    out = tools.list_gateways()
     assert out["ok"] is True
-    assert out["count"] == 9
-    assert "sections" in out
+    assert out["count"] == 5
 
 
-def test_storage_lists_datastores(monkeypatch):
+def test_list_datastores(monkeypatch):
     def fake_call(target, method, path, **_k):
         assert (target, method, path) == ("vcenter", "GET", "/api/vcenter/datastore")
         return {"count": 1, "items": [{"name": "vsan"}]}
 
     monkeypatch.setattr(tools, "call", fake_call)
-    out = tools.storage("list")
+    out = tools.list_datastores()
     assert out["count"] == 1
 
 
-def test_metrics_lists_alerts(monkeypatch):
+def test_list_alerts(monkeypatch):
     def fake_call(target, method, path, query=None, **_k):
         assert (target, method, path) == ("ops", "GET", "/suite-api/api/alerts")
         assert query == {"pageSize": 200}
         return {"count": 5}
 
     monkeypatch.setattr(tools, "call", fake_call)
-    out = tools.metrics("alerts")
+    out = tools.list_alerts()
     assert out["count"] == 5

@@ -5,7 +5,9 @@ Foundation 9.1 estate.
 
 It connects to seven appliances — SDDC Manager, VCF Installer, vCenter, NSX,
 Avi Load Balancer, VCF Operations and vSAN Data Protection — and exposes their
-**8,931 API operations through eight tools**. It handles authentication for
+**8,931 API operations through a small generic set plus four
+domain jobs**. Each domain job is a set of tools, not one
+tool per job. It handles authentication for
 each appliance, resolves request paths, follows async tasks, and records every
 mutating call.
 
@@ -302,12 +304,23 @@ log when the disk is ephemeral.
 | `vcf_task` | `target`, `task_id`, `wait_seconds=0`, `poll_interval=5.0` | Task status and, on failure, which subtask failed and why |
 | `vcf_inventory` | `targets?`, `per_section_limit=25` | Domains, clusters, hosts, gateways and alerts in one snapshot |
 | `vcf_audit` | `limit=50` | Recent mutating calls made through this server |
-| `vcf_vms` | `action=list`, `vm?` | Manage VMs: list, get, power, start, stop, reset, suspend |
-| `vcf_networks` | `action=list` | vCenter networks plus NSX segments and gateways, with a count |
-| `vcf_storage` | `action=list` | vCenter datastores and the count |
-| `vcf_metrics` | `action=alerts` | VCF Operations alerts and the count |
+| `vcf_list_vms` | | Every VM and the count. VM management. |
+| `vcf_get_vm` | `vm` | One VM. VM management. |
+| `vcf_vm_power_state` | `vm` | Current power state. VM management. |
+| `vcf_start_vm` | `vm` | Power on. VM management. |
+| `vcf_stop_vm` | `vm` | Power off. VM management. |
+| `vcf_reset_vm` | `vm` | Reset. VM management. |
+| `vcf_suspend_vm` | `vm` | Suspend. VM management. |
+| `vcf_list_networks` | | vCenter networks. Network management. |
+| `vcf_list_segments` | | NSX segments. Network management. |
+| `vcf_list_gateways` | | NSX gateways. Network management. |
+| `vcf_list_datastores` | | Datastores. Storage management. |
+| `vcf_get_datastore` | `datastore` | One datastore. Storage management. |
+| `vcf_datastore_policy` | `datastore` | Default storage policy. Storage management. |
+| `vcf_list_alerts` | | Operations alerts. Metrics. |
+| `vcf_ops_snapshot` | | Operations snapshot. Metrics. |
 
-`vcf_call` and `vcf_vms` are annotated as destructive; the rest are read-only. A grant can name one domain job, or full access.
+`vcf_call` and the four VM power tools are annotated as destructive; the rest are read-only. A grant names one domain job — a set of tools — or full access.
 
 Typical sequence for a change: `vcf_search_api` → `vcf_describe_api` →
 `vcf_validate` → `vcf_call` → `vcf_task`.
