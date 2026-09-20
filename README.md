@@ -22,7 +22,7 @@ uvx --from git+https://github.com/NiranEC77/vcf-mcp vcf-mcp
 ## Contents
 
 - [How it works](#how-it-works) · [Install](#install) · [Configure](#configure) ·
-  [Connect an agent](#connect-an-agent) · [Tools](#tools) ·
+  [Connect an agent](#connect-an-agent) · [HTTP mode](#http-mode) · [Tools](#tools) ·
   [Targets](#targets) · [Environment variables](#environment-variables) ·
   [Write safety](#write-safety) · [Tests](#tests) ·
   [VCF 9.1 behaviour](#vcf-91-behaviour)
@@ -243,6 +243,53 @@ client that gates writes can do so without a hardcoded tool list.
 
 ---
 
+## HTTP mode
+
+Stdio is for a client that launches the server itself. A hosted copy — a
+PaaS app, a container — serves **Streamable HTTP** at `/mcp` instead. It
+switches on when `$PORT` is set (every PaaS sets it) or with
+`vcf-mcp serve-http`. Install the extra:
+
+```
+pip install "vcf-mcp[http] @ git+https://github.com/NiranEC77/vcf-mcp"
+```
+
+HTTP mode refuses to start with no bearer configured, because it would
+expose live VCF admin APIs to anyone who can reach the route. Two kinds of
+bearer are accepted, alone or together:
+
+**Static tokens.** `VCF_READ_TOKEN` allows GET/HEAD through `vcf_call`;
+`VCF_ADMIN_TOKEN` allows everything. Both at least 16 characters, and
+different from each other.
+
+**OAuth 2.0 access tokens.** Set `VCF_MCP_OAUTH_ISSUER` and the server
+becomes an OAuth resource server: it verifies the JWT against the issuer's
+JWKS (discovered per RFC 8414, or `VCF_MCP_OAUTH_JWKS_URI`), checks expiry,
+and requires an `aud` that names this server (`VCF_MCP_RESOURCE_URL` or one
+of `VCF_MCP_OAUTH_AUDIENCES`). It serves RFC 9728 metadata at
+`/.well-known/oauth-protected-resource` and points to it on every 401.
+
+What the token's `scope` may carry, any one of which is enough:
+
+| Scope | Capability | Meaning |
+|---|---|---|
+| a write tool name (`vcf_call`, `vcf_task`) | admin | the token was issued for that tool |
+| a read tool name (`vcf_targets`, …) or `tools` | read | GET/HEAD only |
+| an intent scope, `urn:iam:agent:intent:<job>` | admin | an agent gateway in front of this server granted the agent a **job**; the gateway has already mapped the tool to that job and asked its policy engine, and strips the tools the job does not cover. This server does not redo that decision by tool name. |
+
+The intent rule is what lets this server sit behind an agent gateway the
+same way any MCP server you do not control does: verify the token, then
+trust the gateway for per-tool authorization. Change the prefix with
+`VCF_MCP_OAUTH_INTENT_PREFIX`. When the backend route is reachable
+without the gateway, restrict it at the network — a job scope opens the
+whole server for a direct caller, exactly as it would for any other MCP
+backend.
+
+`VCF_MCP_AUDIT_LOG=/dev/stdout` keeps the mutation audit in the platform
+log when the disk is ephemeral.
+
+---
+
 ## Tools
 
 | Tool | Arguments | Returns |
@@ -296,6 +343,21 @@ Defaults differ between a clone and an installed copy, as noted:
 | `VCF_MCP_AUDIT_LOG` | Where mutations are recorded | `./logs/vcf-mcp-audit.jsonl` → `~/.local/state/vcf-mcp/vcf-mcp-audit.jsonl` |
 | `VCF_MCP_SPEC_DIR` | Spec source directory | `./specs` → the copy bundled in the package |
 | `VCF_MCP_CACHE_DIR` | Index cache directory | `~/.cache/vcf-mcp` |
+
+HTTP mode only ([HTTP mode](#http-mode)):
+
+| Variable | Effect | Default |
+|---|---|---|
+| `PORT` / `VCF_MCP_HTTP=1` | Serve Streamable HTTP instead of stdio | stdio |
+| `VCF_READ_TOKEN` / `VCF_ADMIN_TOKEN` | Static bearers (read = GET/HEAD; admin = everything) | — |
+| `VCF_MCP_RESOURCE_URL` | This server's public `/mcp` URL (the `aud` it answers to; also sets the allowed host) | `http://127.0.0.1:8080/mcp` |
+| `VCF_ALLOWED_HOSTS` | Comma list for DNS-rebinding protection | host of `VCF_MCP_RESOURCE_URL` + loopback |
+| `VCF_MCP_OAUTH_ISSUER` | Authorization server that issues access tokens; unset = static tokens only | — |
+| `VCF_MCP_OAUTH_JWKS_URI` | Key set URL when the issuer has no RFC 8414 discovery | discovered |
+| `VCF_MCP_OAUTH_AUDIENCES` | Extra `aud` values to accept, e.g. an agent gateway's route | — |
+| `VCF_MCP_OAUTH_INTENT_PREFIX` | Scope prefix a gateway uses for job grants | `urn:iam:agent:intent:` |
+| `VCF_MCP_OAUTH_REQUIRED_SCOPES` | `scopes_supported` fallback in the RFC 9728 document | `tools` |
+| `VCF_MCP_OAUTH_TLS_VERIFY=0` | Skip TLS verification when fetching issuer metadata / JWKS | verify |
 
 ---
 

@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-09-20 — the door was refusing tokens the gateway had already approved
+
+A hosted copy sat behind an agent gateway. An agent was granted one
+job — inspect VCF — and its token carried that job as a scope, not a
+list of tool names. The gateway accepted it, forwarded it, and this
+server answered 401. The gateway then told the agent "backend
+unavailable", which pointed everyone at the wrong component for a day.
+
+The bearer check here only knew tool names and the blanket `tools`
+scope. It had been written before job scopes existed. So it was doing
+the gateway's job, badly, and refusing anything it did not recognise.
+
+The fix is to behave like any MCP server behind a gateway: verify the
+token (signature, expiry, audience for this server) and accept a job
+scope as a grant. Which tools the job covers is the gateway's decision;
+it strips the rest and denies a call outside the job with 403. Tool-name
+scopes still work for tokens that carry them.
+
+While here, the HTTP mode that had lived only in the hosted copy came
+into the package: `$PORT` or `vcf-mcp serve-http`, static tokens or an
+OAuth issuer, RFC 9728 metadata, `/health`, audit to stdout. All of it
+from environment variables; no site names in code.
+
+One thing to say plainly: a job scope opens the whole server for a
+caller that reaches the backend route directly instead of through the
+gateway. That is true of every MCP backend behind a gateway. Keep the
+backend route reachable only from the gateway.
+
 ## 2026-09-17 — slim the list so the model can see the count
 
 Talk asked how many datastores. `vcf_search_api` and `vcf_call`

@@ -1,6 +1,6 @@
 [project]
 name = "vcf-mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP server for configuring and managing VMware Cloud Foundation 9.1"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,15 @@ dependencies = [
     "mcp>=2.0.0",
     "httpx>=0.27",
     "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Streamable HTTP mode (hosted copy): ASGI server, response helpers, JWT
+# verification for OAuth access tokens.
+http = [
+    "uvicorn>=0.30",
+    "starlette>=0.37",
+    "PyJWT[crypto]>=2.8",
 ]
 
 [project.urls]

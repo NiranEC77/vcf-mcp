@@ -20,13 +20,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PKG_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = PKG_ROOT.parent.parent
+# Layouts:
+#   src checkout:    <repo>/src/vcf_mcp   -> PROJECT_ROOT = <repo>
+#   flat hosted app: <app>/vcf_mcp        -> PROJECT_ROOT = <app>  (specs/ beside the package)
+#   installed wheel: no repo root         -> platform config/state dirs below
+_parent = PKG_ROOT.parent
+_grand = _parent.parent
+if (_parent / "specs").is_dir() or (_parent / "pyproject.toml").is_file() or (_parent / "hosts.json").is_file():
+    PROJECT_ROOT = _parent
+elif (_grand / "pyproject.toml").is_file() or (_grand / "specs").is_dir():
+    PROJECT_ROOT = _grand
+else:
+    PROJECT_ROOT = _grand
 
-# The server runs two ways: from a git checkout, and from an installed copy
-# (pip, or `uvx` with no install at all). A checkout keeps its files at the
-# repo root; an installed copy has no repo root to write to, so it uses the
-# platform's config/state directories instead.
-IN_CHECKOUT = (PROJECT_ROOT / "pyproject.toml").is_file()
+# The server runs three ways: from a git checkout, as a flat hosted app, and
+# from an installed copy (pip, or `uvx` with no install at all). The first two
+# keep their files at PROJECT_ROOT; an installed copy has no repo root to write
+# to, so it uses the platform's config/state directories instead.
+IN_CHECKOUT = (
+    (PROJECT_ROOT / "pyproject.toml").is_file()
+    or (PROJECT_ROOT / "specs").is_dir()
+    or (PROJECT_ROOT / "hosts.json").is_file()
+)
 CONFIG_HOME = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "vcf-mcp"
 )

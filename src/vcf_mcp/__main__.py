@@ -6,10 +6,16 @@ terminal without an MCP client in the loop:
 
     vcf-mcp index    build/refresh the operation index and print spec stats
     vcf-mcp check    authenticate to every target and report what answers
+
+A hosted copy serves Streamable HTTP instead of stdio. Either set $PORT
+(every PaaS does) or ask for it:
+
+    vcf-mcp serve-http
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 
@@ -30,6 +36,13 @@ def main() -> None:
         from . import tools
 
         print(json.dumps(tools.targets(check_reachability=True), indent=2, default=str))
+        return
+
+    if command in ("serve-http", "http"):
+        os.environ.setdefault("VCF_MCP_HTTP", "1")
+        from . import server
+
+        server.main_http()
         return
 
     if command in ("-h", "--help", "help"):

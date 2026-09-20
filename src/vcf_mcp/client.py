@@ -11,6 +11,7 @@ scripts take. Set VCF_MCP_VERIFY_TLS=1 to enforce it.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -152,11 +153,22 @@ def _audit(target, method, path, query, body, status, elapsed) -> None:
         "status": status,
         "elapsed_ms": int(elapsed * 1000),
     }
+    line = json.dumps(entry) + "\n"
     try:
-        config.AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        path = config.AUDIT_LOG
+        # Hosted copies have an ephemeral disk; VCF_MCP_AUDIT_LOG=/dev/stdout
+        # keeps mutations in the platform log. Do not mkdir("/dev").
+        stream = {"/dev/stdout": sys.stdout, "-": sys.stdout, "stdout": sys.stdout,
+                  "/dev/stderr": sys.stderr, "stderr": sys.stderr}.get(str(path))
+        if stream is not None:
+            with _audit_lock:
+                stream.write(line)
+                stream.flush()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
         with _audit_lock:
-            with config.AUDIT_LOG.open("a") as handle:
-                handle.write(json.dumps(entry) + "\n")
+            with path.open("a") as handle:
+                handle.write(line)
     except OSError:
         pass
 

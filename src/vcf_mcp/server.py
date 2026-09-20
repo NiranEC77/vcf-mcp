@@ -194,6 +194,16 @@ async def vcf_call(
         timeout: Seconds to wait (VCF operations can be slow; default 300).
         max_response_chars: Shrink oversized responses to fit (default 20000).
     """
+    # HTTP mode only: stdio has no bearer tokens and capability stays "admin".
+    if CAPABILITY.get() == "read" and method.upper() not in ("GET", "HEAD", "OPTIONS"):
+        return {
+            "ok": False,
+            "denied": True,
+            "error": (
+                f"{method.upper()} needs the admin capability; this session's "
+                "bearer token only allows reads (GET/HEAD)."
+            ),
+        }
     return await _run(
         tools.call,
         target=target,
@@ -291,10 +301,197 @@ async def vcf_audit(limit: int = 50) -> Any:
     return await _run(tools.audit, limit=limit)
 
 
+# ---------------------------------------------------------------------------
+# Streamable HTTP. Stdio stays the default for desktop clients; HTTP is for a
+# hosted copy (a PaaS app, a container) that agents reach over the network.
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402
+import secrets  # noqa: E402
+from contextvars import ContextVar  # noqa: E402
+from urllib.parse import urlsplit  # noqa: E402
+
+from . import oauth_bearer  # noqa: E402
+
+# Per-request capability set by the HTTP gate. "admin" may mutate; "read"
+# may only GET/HEAD. Stdio never sets it, so the default applies.
+CAPABILITY: ContextVar[str] = ContextVar("capability", default="admin")
+
+READ_TOOLS = ("vcf_targets", "vcf_search_api", "vcf_describe_api", "vcf_validate", "vcf_inventory", "vcf_audit")
+WRITE_TOOLS = ("vcf_call", "vcf_task")
+
+
+def _default_resource_url() -> str:
+    return oauth_bearer.resource_url(default="http://127.0.0.1:8080/mcp")
+
+
+def _classify_token(presented: str | None) -> str | None:
+    """Map a bearer token -> 'admin' | 'read' | None.
+
+    Static tokens first (constant-time compare). Then a JWT from the OAuth
+    issuer, if one is configured: tool-name scopes, the blanket ``tools``
+    scope, or a gateway-issued intent scope (see ``oauth_bearer``).
+    """
+    if not presented:
+        return None
+    admin = os.environ.get("VCF_ADMIN_TOKEN", "")
+    read = os.environ.get("VCF_READ_TOKEN", "")
+    if admin and secrets.compare_digest(presented, admin):
+        return "admin"
+    if read and secrets.compare_digest(presented, read):
+        return "read"
+    if not oauth_bearer.enabled():
+        return None
+    return oauth_bearer.classify(
+        presented,
+        default_resource=_default_resource_url(),
+        read_scopes=["tools", *READ_TOOLS],
+        write_scopes=list(WRITE_TOOLS),
+    )
+
+
+def _http_token_problems() -> list[str]:
+    problems: list[str] = []
+    read = os.environ.get("VCF_READ_TOKEN", "")
+    admin = os.environ.get("VCF_ADMIN_TOKEN", "")
+    if not read and not admin and not oauth_bearer.enabled():
+        problems.append(
+            "No bearer configured. Set VCF_READ_TOKEN / VCF_ADMIN_TOKEN and/or "
+            "VCF_MCP_OAUTH_ISSUER. HTTP mode would otherwise expose live VCF "
+            "admin APIs unauthenticated. Refusing to start."
+        )
+    if read and admin and secrets.compare_digest(read, admin):
+        problems.append("VCF_READ_TOKEN and VCF_ADMIN_TOKEN are identical.")
+    for name, tok in (("VCF_READ_TOKEN", read), ("VCF_ADMIN_TOKEN", admin)):
+        if tok and len(tok) < 16:
+            problems.append(f"{name} is shorter than 16 characters.")
+    return problems
+
+
+def _allowed_hosts() -> list[str]:
+    """Hosts this server answers for (DNS-rebinding protection).
+
+    ``VCF_ALLOWED_HOSTS`` wins. Otherwise the host of ``VCF_MCP_RESOURCE_URL``
+    plus loopback.
+    """
+    raw = (os.environ.get("VCF_ALLOWED_HOSTS") or "").strip()
+    if raw:
+        return [h.strip() for h in raw.split(",") if h.strip()]
+    hosts = ["localhost", "127.0.0.1"]
+    own = urlsplit(_default_resource_url()).netloc
+    if own and own not in hosts:
+        hosts.insert(0, own)
+    port = os.environ.get("PORT")
+    if port:
+        hosts.extend([f"localhost:{port}", f"127.0.0.1:{port}"])
+    return hosts
+
+
+def build_http_app():
+    """ASGI app: Streamable HTTP MCP + bearer gate + /health + RFC 9728 metadata."""
+    from mcp.server.transport_security import TransportSecuritySettings
+    from starlette.responses import JSONResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    problems = _http_token_problems()
+    if problems:
+        raise SystemExit("Refusing to start HTTP mode:\n  - " + "\n  - ".join(problems))
+
+    # Warm the index so /health reports a real count and the first call is fast.
+    from . import specs
+
+    op_count = len(specs.index())
+    resource = _default_resource_url()
+    metadata_url = resource.rsplit("/mcp", 1)[0] + oauth_bearer.OPR_PATHS[0]
+
+    class AuthMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+
+            path = scope.get("path", "")
+            if path in ("/health", "/healthz"):
+                await JSONResponse(
+                    {"status": "ok", "operations": op_count, "server": "vcf-mcp"}
+                )(scope, receive, send)
+                return
+
+            if oauth_bearer.is_opr_path(path):
+                await JSONResponse(
+                    oauth_bearer.protected_resource(
+                        default_resource=resource,
+                        scopes=["tools", *READ_TOOLS, *WRITE_TOOLS],
+                        name="vcf-mcp",
+                    )
+                )(scope, receive, send)
+                return
+
+            presented = None
+            for k, v in scope.get("headers") or []:
+                if k == b"authorization":
+                    raw = v.decode()
+                    presented = raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
+                    break
+
+            capability = _classify_token(presented)
+            if capability is None:
+                headers = {
+                    "WWW-Authenticate": oauth_bearer.www_authenticate(
+                        metadata_url=metadata_url, resource=resource
+                    )
+                }
+                await JSONResponse(
+                    {
+                        "error": "unauthorized",
+                        "detail": (
+                            "Present a bearer token: VCF_READ_TOKEN for reads, "
+                            "VCF_ADMIN_TOKEN for mutations, or an access token "
+                            "from the configured OAuth issuer for this resource."
+                        ),
+                    },
+                    status_code=401,
+                    headers=headers,
+                )(scope, receive, send)
+                return
+
+            token = CAPABILITY.set(capability)
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                CAPABILITY.reset(token)
+
+    hosts = _allowed_hosts()
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"https://{h}" for h in hosts] + [f"http://{h}" for h in hosts],
+    )
+    return AuthMiddleware(mcp.streamable_http_app(transport_security=security))
+
+
+def main_http() -> None:
+    """Serve Streamable HTTP on $PORT (default 8080)."""
+    import uvicorn
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8080"))
+    uvicorn.run(build_http_app(), host=host, port=port, log_level="info")
+
+
 def main() -> None:
     # httpx logs a line per request at INFO. Against VCF that is one line per
     # inventory section and one per poll, all of it noise in the client's log.
     # Warnings and errors still come through.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # A PaaS sets $PORT; desktop clients launch with neither and get stdio.
+    if os.environ.get("PORT") or os.environ.get("VCF_MCP_HTTP", "").lower() in ("1", "true", "yes"):
+        main_http()
+        return
     mcp.run()
