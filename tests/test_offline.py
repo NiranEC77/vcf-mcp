@@ -446,3 +446,29 @@ def test_list_alerts(monkeypatch):
     monkeypatch.setattr(tools, "call", fake_call)
     out = tools.list_alerts()
     assert out["count"] == 5
+
+
+def test_vm_disk_latency(monkeypatch):
+    calls = []
+
+    def fake_request(target, method, path, query=None, **_k):
+        calls.append((method, path, query))
+        if path == "/suite-api/api/resources":
+            if query["name"] == "missing":
+                return 200, {"resourceList": []}, {}
+            return 200, {"resourceList": [{"identifier": "id-1"}]}, {}
+        return 200, {"values": [{"resourceId": "id-1", "stat-list": {"stat": [
+            {"statKey": {"key": "virtualDisk:Aggregate of all instances|totalLatency"},
+             "data": [12.34], "timestamps": [1791831330717]},
+            {"statKey": {"key": "cpu|usage_average"}, "data": [3.0], "timestamps": [1791831330717]},
+        ]}}]}, {}
+
+    monkeypatch.setattr(tools.config, "get_target", lambda name: name)
+    monkeypatch.setattr(tools.client, "request", fake_request)
+    out = tools.vm_disk_latency(["node-a", "missing"])
+    assert out["ok"] is True
+    assert out["vms"][0]["total_latency_ms"] == 12.3
+    assert "cpu" not in json.dumps(out["vms"][0])
+    assert out["vms"][0]["sampled_at"].startswith("2026-10-12")
+    assert out["vms"][1] == {"vm": "missing", "found": False, "status": 200}
+    assert tools.vm_disk_latency([])["ok"] is False

@@ -68,6 +68,7 @@ VCF_READ_SCOPES = (
     "vcf_datastore_policy",
     "vcf_list_alerts",
     "vcf_ops_snapshot",
+    "vcf_vm_disk_latency",
 )
 VCF_WRITE_SCOPES = (
     "vcf_call",

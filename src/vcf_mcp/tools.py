@@ -588,6 +588,57 @@ def list_alerts() -> dict:
     return call("ops", "GET", "/suite-api/api/alerts", query={"pageSize": 200})
 
 
+# VCF Operations VM disk metrics, in milliseconds. Operations samples every
+# five minutes, so a new load shows up one collection later.
+LATENCY_STATS = {
+    "virtualDisk:Aggregate of all instances|totalLatency": "total_latency_ms",
+    "virtualDisk:Aggregate of all instances|totalReadLatency_average": "read_latency_ms",
+    "virtualDisk:Aggregate of all instances|totalWriteLatency_average": "write_latency_ms",
+    "virtualDisk|20_sec_peak_totalLatency_average": "peak_20s_latency_ms",
+    "virtualDisk|peak_vDisk_iops": "peak_iops",
+}
+MAX_LATENCY_VMS = 8
+
+
+def vm_disk_latency(vms: list[str]) -> dict:
+    """Latest disk latency per VM from VCF Operations, by VM name."""
+    names = [str(v).strip() for v in (vms or []) if str(v).strip()]
+    if not names:
+        return {"ok": False, "error": "pass vms: one or more VM names from vcf_list_vms"}
+    names = names[:MAX_LATENCY_VMS]
+    ops = config.get_target("ops")
+    rows = []
+    for name in names:
+        status, found, _ = client.request(
+            ops, "GET", "/suite-api/api/resources", query={"name": name, "resourceKind": "VirtualMachine"}
+        )
+        ids = [r.get("identifier") for r in (found or {}).get("resourceList") or [] if isinstance(r, dict)]
+        if status != 200 or not ids:
+            rows.append({"vm": name, "found": False, "status": status})
+            continue
+        status, stats, _ = client.request(ops, "GET", f"/suite-api/api/resources/{ids[0]}/stats/latest")
+        row: dict[str, Any] = {"vm": name, "found": True, "status": status}
+        newest = 0
+        for value in (stats or {}).get("values") or []:
+            for stat in ((value.get("stat-list") or {}).get("stat") or []):
+                field = LATENCY_STATS.get(((stat.get("statKey") or {}).get("key")) or "")
+                data, stamps = stat.get("data") or [], stat.get("timestamps") or []
+                if field and data:
+                    row[field] = round(float(data[-1]), 1)
+                    newest = max(newest, int(stamps[-1]) if stamps else 0)
+        if newest:
+            row["sampled_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest / 1000))
+            row["age_seconds"] = int(time.time() - newest / 1000)
+        rows.append(row)
+    return {
+        "ok": True,
+        "source": "VCF Operations, latest VirtualMachine disk metrics",
+        "units": "milliseconds, except peak_iops",
+        "collection": "VCF Operations collects every five minutes",
+        "vms": rows,
+    }
+
+
 def ops_snapshot() -> dict:
     """One Operations snapshot: active alerts from the inventory recipe."""
     return inventory(targets_wanted=["ops"])

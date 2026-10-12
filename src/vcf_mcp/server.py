@@ -392,6 +392,12 @@ async def vcf_ops_snapshot() -> Any:
     return await _run(tools.ops_snapshot)
 
 
+@mcp.tool(**_hints(read_only=True))
+async def vcf_vm_disk_latency(vms: list[str]) -> Any:
+    """Latest disk latency of up to 8 VMs from VCF Operations, in ms. Pass VM names. Metrics."""
+    return await _run(tools.vm_disk_latency, vms=vms)
+
+
 # ---------------------------------------------------------------------------
 # Streamable HTTP. Stdio stays the default for desktop clients; HTTP is for a
 # hosted copy (a PaaS app, a container) that agents reach over the network.
@@ -426,6 +432,7 @@ READ_TOOLS = (
     "vcf_datastore_policy",
     "vcf_list_alerts",
     "vcf_ops_snapshot",
+    "vcf_vm_disk_latency",
 )
 WRITE_TOOLS = (
     "vcf_call",
