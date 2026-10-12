@@ -317,7 +317,7 @@ log when the disk is ephemeral.
 | `vcf_list_datastores` | | Datastores. Storage management. |
 | `vcf_get_datastore` | `datastore` | One datastore. Storage management. |
 | `vcf_datastore_policy` | `datastore` | Default storage policy. Storage management. |
-| `vcf_list_alerts` | | Operations alerts. Metrics. |
+| `vcf_list_alerts` | | Active Operations alerts: count, count by level, top 25 critical first. Metrics. |
 | `vcf_ops_snapshot` | | Operations snapshot. Metrics. |
 
 `vcf_call` and the four VM power tools are annotated as destructive; the rest are read-only. A grant names one domain job — a set of tools — or full access.

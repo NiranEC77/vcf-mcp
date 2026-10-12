@@ -382,7 +382,7 @@ async def vcf_datastore_policy(datastore: str) -> Any:
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_alerts() -> Any:
-    """List current VCF Operations alerts and the count. Metrics."""
+    """Active VCF Operations alerts: count, count by level, top 25 critical first. Metrics."""
     return await _run(tools.list_alerts)
 
 

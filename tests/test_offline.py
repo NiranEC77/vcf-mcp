@@ -438,14 +438,54 @@ def test_list_datastores(monkeypatch):
 
 
 def test_list_alerts(monkeypatch):
-    def fake_call(target, method, path, query=None, **_k):
-        assert (target, method, path) == ("ops", "GET", "/suite-api/api/alerts")
-        assert query == {"pageSize": 200}
-        return {"count": 5}
+    calls = []
 
-    monkeypatch.setattr(tools, "call", fake_call)
+    def fake_request(target, method, path, query=None, body=None, **_k):
+        calls.append((method, path, query, body))
+        if path == "/suite-api/api/alerts/query":
+            return 200, {"pageInfo": {"totalCount": 3}, "alerts": [
+                {"alertId": "w", "alertLevel": "WARNING", "status": "ACTIVE", "resourceId": "r1", "startTimeUTC": 3},
+                {"alertId": "c-old", "alertLevel": "CRITICAL", "status": "ACTIVE", "resourceId": "r2", "startTimeUTC": 1,
+                 "alertDefinitionName": "Host lost redundancy"},
+                {"alertId": "c-new", "alertLevel": "CRITICAL", "status": "ACTIVE", "resourceId": "r2", "startTimeUTC": 2},
+            ]}, {}
+        return 200, {"resourceList": [
+            {"identifier": "r2", "resourceKey": {"name": "esx-01", "resourceKindKey": "HostSystem"}},
+        ]}, {}
+
+    monkeypatch.setattr(tools.config, "get_target", lambda name: name)
+    monkeypatch.setattr(tools.client, "request", fake_request)
     out = tools.list_alerts()
-    assert out["count"] == 5
+    assert calls[0][:2] == ("POST", "/suite-api/api/alerts/query")
+    assert calls[0][3] == {"activeOnly": True}
+    assert out["ok"] is True and out["count"] == 3
+    assert out["by_level"] == {"CRITICAL": 2, "WARNING": 1}
+    assert [r["alertId"] for r in out["items"]] == ["c-new", "c-old", "w"]
+    assert out["items"][1]["name"] == "Host lost redundancy"
+    assert out["items"][0]["resourceName"] == "esx-01"
+    assert out["items"][2]["resourceName"] is None
+
+
+def test_list_alerts_empty_and_error(monkeypatch):
+    monkeypatch.setattr(tools.config, "get_target", lambda name: name)
+    monkeypatch.setattr(tools.client, "request",
+                        lambda *a, **k: (200, {"pageInfo": {"totalCount": 0}, "alerts": []}, {}))
+    out = tools.list_alerts()
+    assert out["items"] == [] and out["count"] == 0 and "no active alerts" in out["reason"]
+
+    monkeypatch.setattr(tools.client, "request", lambda *a, **k: (503, {"message": "down"}, {}))
+    out = tools.list_alerts()
+    assert out["ok"] is False and out["items"] == [] and "503" in out["reason"]
+
+
+def test_call_items_come_from_fitted_body(monkeypatch):
+    page = {"pageInfo": {"totalCount": 900}, "alerts": [{"alertId": f"a{i}", "x": "y" * 200} for i in range(400)]}
+    monkeypatch.setattr(tools.config, "get_target", lambda name: name)
+    monkeypatch.setattr(tools.client, "request", lambda *a, **k: (200, page, {}))
+    out = tools.call("ops", "GET", "/suite-api/api/alerts", max_response_chars=5000)
+    assert out["count"] == 900
+    assert out["showing"] < 400
+    assert len(json.dumps(out)) < 20000
 
 
 def test_vm_disk_latency(monkeypatch):

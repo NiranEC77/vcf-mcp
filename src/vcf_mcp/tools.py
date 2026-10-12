@@ -342,7 +342,9 @@ def call(
     elif isinstance(body, dict) and isinstance(body.get("items"), list):
         items = body["items"]
     elif n is not None:
-        items = collection_items(fitted_src)
+        # From the fitted body, never the full source: the untrimmed copy
+        # once made a 116 KB reply that the AI Gateway delivered as empty.
+        items = collection_items(body)
     if items is not None:
         result["items"] = items
         result["showing"] = len(items)
@@ -583,9 +585,100 @@ def datastore_policy(datastore: str) -> dict:
     return call("vcenter", "GET", f"/api/vcenter/datastore/{ident}/default-policy")
 
 
+# Operations keeps every cancelled alert too (15 000+ in this lab), so the
+# plain alert list is a page of history. The alert query with activeOnly
+# returns only what is open now. It is a POST, but it changes nothing.
+_ALERT_LEVELS = ("CRITICAL", "IMMEDIATE", "WARNING", "INFORMATION", "NONE", "UNKNOWN", "AUTO")
+ALERT_PAGE = 500
+ALERT_ROWS = 25
+
+
+def _alert_time(ms: Any) -> str | None:
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ms / 1000))
+
+
+def _resource_names(ops: Any, ids: list[str]) -> dict[str, dict]:
+    """Name and kind for each resource id. One call; a failure leaves ids bare."""
+    if not ids:
+        return {}
+    try:
+        status, payload, _ = client.request(
+            ops, "GET", "/suite-api/api/resources",
+            query={"resourceId": ids, "pageSize": len(ids)}, timeout=30,
+        )
+    except Exception:
+        return {}
+    if status != 200 or not isinstance(payload, dict):
+        return {}
+    out = {}
+    for res in payload.get("resourceList") or []:
+        if not isinstance(res, dict) or not res.get("identifier"):
+            continue
+        key = res.get("resourceKey") or {}
+        out[res["identifier"]] = {"name": key.get("name"), "kind": key.get("resourceKindKey")}
+    return out
+
+
 def list_alerts() -> dict:
-    """Current VCF Operations alerts, with the count."""
-    return call("ops", "GET", "/suite-api/api/alerts", query={"pageSize": 200})
+    """Active VCF Operations alerts: count, count by level, newest critical first."""
+    ops = config.get_target("ops")
+    status, payload, _ = client.request(
+        ops, "POST", "/suite-api/api/alerts/query",
+        query={"page": 0, "pageSize": ALERT_PAGE}, body={"activeOnly": True}, timeout=60,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "count": 0,
+            "items": [],
+            "status": status,
+            "reason": f"VCF Operations alert query answered HTTP {status}",
+            "detail": client.redact(payload) if payload else None,
+        }
+    alerts = [a for a in payload.get("alerts") or [] if isinstance(a, dict)]
+    info = payload.get("pageInfo") or {}
+    total = info.get("totalCount") if isinstance(info.get("totalCount"), int) else len(alerts)
+
+    by_level: dict[str, int] = {}
+    for a in alerts:
+        level = str(a.get("alertLevel") or "UNKNOWN").upper()
+        by_level[level] = by_level.get(level, 0) + 1
+    rank = {lvl: i for i, lvl in enumerate(_ALERT_LEVELS)}
+    alerts.sort(key=lambda a: (rank.get(str(a.get("alertLevel")).upper(), 99), -(a.get("startTimeUTC") or 0)))
+    top = alerts[:ALERT_ROWS]
+    names = _resource_names(ops, sorted({a["resourceId"] for a in top if a.get("resourceId")}))
+
+    rows = []
+    for a in top:
+        res = names.get(a.get("resourceId") or "", {})
+        rows.append({
+            "alertId": a.get("alertId"),
+            "name": a.get("alertDefinitionName"),
+            "alertLevel": a.get("alertLevel"),
+            "status": a.get("status"),
+            "impact": a.get("alertImpact"),
+            "resourceId": a.get("resourceId"),
+            "resourceName": res.get("name"),
+            "resourceKind": res.get("kind"),
+            "startTimeUTC": _alert_time(a.get("startTimeUTC")),
+        })
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "count": total,
+        "summary": f"{total} active alerts",
+        "by_level": {lvl: by_level[lvl] for lvl in sorted(by_level, key=lambda x: rank.get(x, 99))},
+        "showing": len(rows),
+        "items": rows,
+        "source": "VCF Operations POST /suite-api/api/alerts/query activeOnly=true (read-only)",
+    }
+    if not rows:
+        out["reason"] = "VCF Operations reports no active alerts"
+    if total > len(alerts):
+        out["note"] = f"by_level counts the first {len(alerts)} of {total} active alerts"
+    return out
 
 
 # VCF Operations VM disk metrics, in milliseconds. Operations samples every

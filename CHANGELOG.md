@@ -2,6 +2,11 @@
 
 Terse, dated. Component — change — verification.
 
+## 2026-10-12
+
+- tools: **`vcf_list_alerts` returns active alerts only** — read-only `POST /suite-api/api/alerts/query` with `activeOnly`; reply is `count`, `by_level`, and the top 25 rows (critical first, newest first) with alert name and resource name; an empty list or an error carries `reason`. Before, the plain alert list was a 116 KB page of mostly cancelled history and the AI Gateway delivered it as an empty body — verified `pytest tests/test_offline.py -q` 52 passed
+- vcf_call: **`items` comes from the fitted body**, not the untrimmed source, so a big list under a non-`items` key no longer doubles the reply — verified `test_call_items_come_from_fitted_body`
+
 ## 2026-09-20
 
 - tools: **each domain job is a set of tools** — VM management has list/get/power/start/stop/reset/suspend; network has networks/segments/gateways; storage has list/get/policy; metrics has alerts/snapshot; not one tool per job — verified `pytest tests/ -q`
