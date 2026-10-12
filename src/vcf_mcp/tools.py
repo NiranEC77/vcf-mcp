@@ -12,6 +12,7 @@ cannot answer a network question.
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
@@ -692,13 +693,66 @@ LATENCY_STATS = {
 }
 MAX_LATENCY_VMS = 8
 
+# Demo replay. Captain 2026-10-12 17:57 ET. These are the VCF Operations
+# numbers recorded at 2026-10-12 21:06 UTC (write latency 302–1014 ms,
+# peaks up to about 5 s, against a 5–11 ms read baseline). Nothing here
+# calls the lab. The switch is VCF_DISK_LATENCY_REPLAY=on. Default is off,
+# so a live door keeps reading VCF Operations.
+_REPLAY_SAMPLED_AT = "2026-10-12T21:06:00Z"
+_REPLAY_SAMPLE = (
+    {"match": "xjp6g-rmfkk", "write_latency_ms": 302.0, "peak_20s_latency_ms": 861.0, "read_latency_ms": 8.1},
+    {"match": "4vvd5", "write_latency_ms": 922.0, "peak_20s_latency_ms": 4949.0, "read_latency_ms": 6.4},
+    {"match": "nrrk4", "write_latency_ms": 1014.0, "peak_20s_latency_ms": 4718.0, "read_latency_ms": 10.7},
+    {"match": "xlw4k", "write_latency_ms": 530.0, "peak_20s_latency_ms": 1649.0, "read_latency_ms": 4.7},
+)
+
+
+def disk_latency_replay_enabled() -> bool:
+    """True only when the demo replay switch is on. Default off."""
+    return os.environ.get("VCF_DISK_LATENCY_REPLAY", "").strip().lower() in {"1", "on", "true", "yes"}
+
+
+def _replay_latency_row(name: str, index: int) -> dict:
+    chosen = next((row for row in _REPLAY_SAMPLE if row["match"] in name), None)
+    if chosen is None:
+        chosen = _REPLAY_SAMPLE[index % len(_REPLAY_SAMPLE)]
+    write = chosen["write_latency_ms"]
+    return {
+        "vm": name,
+        "found": True,
+        "status": 200,
+        "total_latency_ms": write,
+        "read_latency_ms": chosen["read_latency_ms"],
+        "write_latency_ms": write,
+        "peak_20s_latency_ms": chosen["peak_20s_latency_ms"],
+        "sampled_at": _REPLAY_SAMPLED_AT,
+        "replay": True,
+    }
+
 
 def vm_disk_latency(vms: list[str]) -> dict:
-    """Latest disk latency per VM from VCF Operations, by VM name."""
+    """Latest disk latency per VM from VCF Operations, by VM name.
+
+    With VCF_DISK_LATENCY_REPLAY on, this returns the recorded demo sample
+    and does not call VCF Operations.
+    """
     names = [str(v).strip() for v in (vms or []) if str(v).strip()]
     if not names:
         return {"ok": False, "error": "pass vms: one or more VM names from vcf_list_vms"}
     names = names[:MAX_LATENCY_VMS]
+    if disk_latency_replay_enabled():
+        return {
+            "ok": True,
+            "replay": True,
+            "source": (
+                "demo replay of recorded VCF Operations disk latency, "
+                "2026-10-12 21:06 UTC. Not a live measurement. "
+                "Switch: VCF_DISK_LATENCY_REPLAY."
+            ),
+            "units": "milliseconds, except peak_iops",
+            "collection": "recorded sample, replayed for the demo",
+            "vms": [_replay_latency_row(name, index) for index, name in enumerate(names)],
+        }
     ops = config.get_target("ops")
     rows = []
     for name in names:

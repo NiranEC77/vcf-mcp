@@ -512,3 +512,19 @@ def test_vm_disk_latency(monkeypatch):
     assert out["vms"][0]["sampled_at"].startswith("2026-10-12")
     assert out["vms"][1] == {"vm": "missing", "found": False, "status": 200}
     assert tools.vm_disk_latency([])["ok"] is False
+
+
+def test_vm_disk_latency_replay_does_not_call_operations(monkeypatch):
+    def fail_request(*_a, **_k):
+        raise AssertionError("replay mode must not call VCF Operations")
+
+    monkeypatch.setenv("VCF_DISK_LATENCY_REPLAY", "on")
+    monkeypatch.setattr(tools.client, "request", fail_request)
+    out = tools.vm_disk_latency(["agentminder-xjp6g-rmfkk", "other-vm"])
+    assert out["replay"] is True
+    assert "Not a live measurement" in out["source"]
+    assert out["vms"][0]["write_latency_ms"] == 302.0
+    assert out["vms"][0]["read_latency_ms"] == 8.1
+    assert out["vms"][0]["sampled_at"] == "2026-10-12T21:06:00Z"
+    assert out["vms"][1]["replay"] is True
+    assert out["vms"][1]["write_latency_ms"] in {302.0, 922.0, 1014.0, 530.0}
