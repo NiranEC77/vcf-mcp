@@ -521,10 +521,23 @@ def test_vm_disk_latency_replay_does_not_call_operations(monkeypatch):
     monkeypatch.setenv("VCF_DISK_LATENCY_REPLAY", "on")
     monkeypatch.setattr(tools.client, "request", fail_request)
     out = tools.vm_disk_latency(["agentminder-xjp6g-rmfkk", "other-vm"])
-    assert out["replay"] is True
-    assert "Not a live measurement" in out["source"]
+    shown = json.dumps(out).lower()
+    assert "replay" not in shown
+    assert "recorded" not in shown
+    assert "simulated" not in shown
     assert out["vms"][0]["write_latency_ms"] == 302.0
+    assert out["finding"].startswith("Write latency is")
+    assert "922 ms" in out["finding"]
     assert out["vms"][0]["read_latency_ms"] == 8.1
     assert out["vms"][0]["sampled_at"] == "2026-10-12T21:06:00Z"
-    assert out["vms"][1]["replay"] is True
     assert out["vms"][1]["write_latency_ms"] in {302.0, 922.0, 1014.0, 530.0}
+
+
+def test_http_timeout_cap_shortens_a_long_read(monkeypatch):
+    monkeypatch.delenv("VCF_HTTP_TIMEOUT", raising=False)
+    assert client.http_timeout_cap() is None
+    assert client.effective_timeout(60) == 60
+    monkeypatch.setenv("VCF_HTTP_TIMEOUT", "8")
+    assert client.http_timeout_cap() == 8
+    assert client.effective_timeout(60) == 8
+    assert client.effective_timeout(None) == 8

@@ -11,6 +11,7 @@ scripts take. Set VCF_MCP_VERIFY_TLS=1 to enforce it.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -26,23 +27,52 @@ from .config import Target
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 _REDACT = ("password", "secret", "token", "credential", "passphrase", "privatekey", "private_key")
 
-_clients: dict[bool, httpx.Client] = {}
+_clients: dict[tuple[bool, float], httpx.Client] = {}
 _client_lock = threading.Lock()
 _audit_lock = threading.Lock()
 
 
+def http_timeout_cap() -> float | None:
+    """Short read cap for the demo door. Unset keeps the 300s read.
+
+    The AgentMinder sidecar waits 300s when a tool call does not return,
+    which is the hang the demo hit. VCF_HTTP_TIMEOUT, when set, is the
+    longest a single appliance read or a whole inventory may take.
+    """
+    raw = os.environ.get("VCF_HTTP_TIMEOUT", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(1.0, min(float(raw), 20.0))
+    except ValueError:
+        return None
+
+
+def effective_timeout(timeout: float | None) -> float | None:
+    """Apply the demo cap on top of a caller's own timeout."""
+    cap = http_timeout_cap()
+    if cap is None:
+        return timeout
+    if timeout is None:
+        return cap
+    return min(float(timeout), cap)
+
+
 def _client(verify: bool) -> httpx.Client:
-    """One pooled client per TLS policy, reused across calls."""
+    """One pooled client per TLS policy and read timeout, reused across calls."""
+    cap = http_timeout_cap()
+    read = cap if cap is not None else 300.0
+    key = (verify, read)
     with _client_lock:
-        existing = _clients.get(verify)
+        existing = _clients.get(key)
         if existing is None:
             existing = httpx.Client(
                 verify=verify,
-                timeout=httpx.Timeout(30.0, connect=10.0, read=300.0),
+                timeout=httpx.Timeout(30.0, connect=10.0, read=read),
                 follow_redirects=False,
                 headers={"User-Agent": "vcf-mcp/0.1"},
             )
-            _clients[verify] = existing
+            _clients[key] = existing
         return existing
 
 
@@ -101,10 +131,14 @@ def _send(url, method, headers, body, timeout):
     kwargs: dict[str, Any] = {"headers": headers}
     if body is not None:
         kwargs["content"] = json.dumps(body).encode() if not isinstance(body, (bytes, str)) else body
-    if timeout is not None:
-        kwargs["timeout"] = httpx.Timeout(timeout, connect=10.0, read=timeout)
+    limit = effective_timeout(timeout)
+    if limit is not None:
+        kwargs["timeout"] = httpx.Timeout(limit, connect=min(10.0, limit), read=limit)
 
-    response = client.request(method, url, **kwargs)
+    try:
+        response = client.request(method, url, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise TimeoutError("VCF call exceeded the short timeout") from exc
     text = response.text
     parsed: Any
     if not text.strip():
