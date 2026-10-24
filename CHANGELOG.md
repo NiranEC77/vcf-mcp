@@ -4,6 +4,7 @@ Terse, dated. Component — change — verification.
 
 ## 2026-10-24
 
+- http: **a generic gateway intent is not admin** — the verified token must name the exact tool (`vcf_start_vm` or `urn:iam:agent:intent:vcf_start_vm`); `VCF_MCP_GATEWAY_JOB_MAP` is the explicit migration map and defaults to empty; stdio and the static tokens are unchanged — verified `pytest tests/ -q` 101 passed, and a sandboxed Hermes client against a local issuer
 - client: **read capability cannot mutate** — `authorize_mutation` runs in `client.request` before host lookup and before an appliance token is minted; `vcf_call` and `start/stop/reset/suspend` share it; alert query and validation stay `mutation=False` — verified `pytest tests/ -q` 91 passed, no appliance
 - oauth: **`vcf_task` is a read scope** — polling a task is GET; that scope no longer counts as admin
 - proof: **`agentminder_gate.py` is disposable** — per-tool `urn:iam:agent:intent:<tool>` on fixture claims; not wired to the HTTP gate; production grants unchanged — verified `tests/test_agentminder_gate.py`
