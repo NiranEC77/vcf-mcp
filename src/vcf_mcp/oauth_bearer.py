@@ -69,10 +69,10 @@ VCF_READ_SCOPES = (
     "vcf_list_alerts",
     "vcf_ops_snapshot",
     "vcf_vm_disk_latency",
+    "vcf_task",
 )
 VCF_WRITE_SCOPES = (
     "vcf_call",
-    "vcf_task",
     "vcf_start_vm",
     "vcf_stop_vm",
     "vcf_reset_vm",

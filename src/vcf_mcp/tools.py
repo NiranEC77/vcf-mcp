@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from . import auth, client, config, specs
+from .authz import CAPABILITY, authorize_mutation
 
 DEFAULT_MAX_CHARS = 20_000
 # One list row must never fill the client window. Agent Builder (and the
@@ -284,8 +285,18 @@ def call(
     goes through, because the specs do not always cover every path a given
     build serves.
     """
-    resolved = config.get_target(target)
     method = (method or "GET").upper()
+    if method in client.MUTATING:
+        outcome = authorize_mutation(CAPABILITY.get())
+        if outcome != "permit":
+            return {
+                "ok": False,
+                "denied": True,
+                "authorization": outcome,
+                "enforced_by": "vcf-mcp",
+                "error": f"authorization {outcome}",
+            }
+    resolved = config.get_target(target)
     if not path.startswith("/"):
         path = "/" + path
 
@@ -640,6 +651,7 @@ def list_alerts() -> dict:
     status, payload, _ = client.request(
         ops, "POST", "/suite-api/api/alerts/query",
         query={"page": 0, "pageSize": ALERT_PAGE}, body={"activeOnly": True}, timeout=60,
+        mutation=False,
     )
     if status != 200 or not isinstance(payload, dict):
         return {
@@ -902,7 +914,7 @@ def validate(
         }
 
     status, payload, _ = client.request(
-        resolved, "POST", entry["path"], body=body, timeout=120
+        resolved, "POST", entry["path"], body=body, timeout=120, mutation=False,
     )
     result: dict[str, Any] = {
         "target": target,

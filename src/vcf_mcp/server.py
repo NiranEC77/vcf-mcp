@@ -195,16 +195,20 @@ async def vcf_call(
         timeout: Seconds to wait (VCF operations can be slow; default 300).
         max_response_chars: Shrink oversized responses to fit (default 20000).
     """
-    # HTTP mode only: stdio has no bearer tokens and capability stays "admin".
-    if CAPABILITY.get() == "read" and method.upper() not in ("GET", "HEAD", "OPTIONS"):
-        return {
-            "ok": False,
-            "denied": True,
-            "error": (
-                f"{method.upper()} needs the admin capability; this session's "
-                "bearer token only allows reads (GET/HEAD)."
-            ),
-        }
+    # Same guard the dedicated power tools hit inside tools.call.
+    # A read token returns here, before tools.call and before any appliance.
+    if method.upper() not in ("GET", "HEAD", "OPTIONS"):
+        from .authz import CAPABILITY, authorize_mutation
+
+        outcome = authorize_mutation(CAPABILITY.get())
+        if outcome != "permit":
+            return {
+                "ok": False,
+                "denied": True,
+                "authorization": outcome,
+                "enforced_by": "vcf-mcp",
+                "error": f"authorization {outcome}",
+            }
     return await _run(
         tools.call,
         target=target,
@@ -405,43 +409,16 @@ async def vcf_vm_disk_latency(vms: list[str]) -> Any:
 
 import os  # noqa: E402
 import secrets  # noqa: E402
-from contextvars import ContextVar  # noqa: E402
 from urllib.parse import urlsplit  # noqa: E402
 
 from . import oauth_bearer  # noqa: E402
+from .authz import CAPABILITY  # noqa: E402
 
 # Per-request capability set by the HTTP gate. "admin" may mutate; "read"
-# may only GET/HEAD. Stdio never sets it, so the default applies.
-CAPABILITY: ContextVar[str] = ContextVar("capability", default="admin")
-
-READ_TOOLS = (
-    "vcf_targets",
-    "vcf_search_api",
-    "vcf_describe_api",
-    "vcf_validate",
-    "vcf_inventory",
-    "vcf_audit",
-    "vcf_list_vms",
-    "vcf_get_vm",
-    "vcf_vm_power_state",
-    "vcf_list_networks",
-    "vcf_list_segments",
-    "vcf_list_gateways",
-    "vcf_list_datastores",
-    "vcf_get_datastore",
-    "vcf_datastore_policy",
-    "vcf_list_alerts",
-    "vcf_ops_snapshot",
-    "vcf_vm_disk_latency",
-)
-WRITE_TOOLS = (
-    "vcf_call",
-    "vcf_task",
-    "vcf_start_vm",
-    "vcf_stop_vm",
-    "vcf_reset_vm",
-    "vcf_suspend_vm",
-)
+# may only perform non-mutating calls. Stdio never sets it, so the default
+# in authz.CAPABILITY applies.
+READ_TOOLS = oauth_bearer.VCF_READ_SCOPES
+WRITE_TOOLS = oauth_bearer.VCF_WRITE_SCOPES
 
 
 def _default_resource_url() -> str:

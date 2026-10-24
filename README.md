@@ -260,9 +260,10 @@ HTTP mode refuses to start with no bearer configured, because it would
 expose live VCF admin APIs to anyone who can reach the route. Two kinds of
 bearer are accepted, alone or together:
 
-**Static tokens.** `VCF_READ_TOKEN` allows GET/HEAD through `vcf_call`;
-`VCF_ADMIN_TOKEN` allows everything. Both at least 16 characters, and
-different from each other.
+**Static tokens.** `VCF_READ_TOKEN` cannot authorize a mutation.
+`VCF_ADMIN_TOKEN` can. Both at least 16 characters, and different from
+each other. The check runs in `client.request` before the appliance is
+contacted, and the four VM power tools use that same check.
 
 **OAuth 2.0 access tokens.** Set `VCF_MCP_OAUTH_ISSUER` and the server
 becomes an OAuth resource server: it verifies the JWT against the issuer's
@@ -275,8 +276,8 @@ What the token's `scope` may carry, any one of which is enough:
 
 | Scope | Capability | Meaning |
 |---|---|---|
-| a write tool name (`vcf_call`, `vcf_task`) | admin | the token was issued for that tool |
-| a read tool name (`vcf_targets`, …) or `tools` | read | GET/HEAD only |
+| a write tool name (`vcf_call`, `vcf_start_vm`, `vcf_stop_vm`, `vcf_reset_vm`, `vcf_suspend_vm`) | admin | the token was issued for a mutating tool |
+| a read tool name (`vcf_targets`, `vcf_task`, …) or `tools` | read | non-mutating calls only |
 | an intent scope, `urn:iam:agent:intent:<job>` | admin | an agent gateway in front of this server granted the agent a **job**; the gateway has already mapped the tool to that job and asked its policy engine, and strips the tools the job does not cover. This server does not redo that decision by tool name. |
 
 The intent rule is what lets this server sit behind an agent gateway the
@@ -380,19 +381,28 @@ HTTP mode only ([HTTP mode](#http-mode)):
 
 ## Write safety
 
-**There is no write gate.** Any operation the API allows — including
-`DELETE /v1/domains/{id}` and host decommission — executes immediately when the
-agent calls it. This is deliberate: the server does not try to second-guess
-which operations are safe.
+A read capability cannot perform a mutation. `client.request` refuses
+POST, PUT, PATCH, and DELETE before it resolves a host or mints an
+appliance token, unless the caller marks that one call `mutation=False`.
+The alert query and the validation twin are the two calls marked that
+way: both are POST-shaped and neither changes the estate. The four VM
+power tools and `vcf_call` are not marked that way. An admin capability
+is the exact string `admin`. A missing or unrecognised capability is
+refused as well.
 
-What exists instead is a record. Every POST/PATCH/PUT/DELETE is appended to
+`vcf_task` follows a task with GET. It is a read scope. Holding it does
+not authorize a power operation.
+
+An intent scope from a gateway is still treated as admin by the HTTP
+gate. That gate trusts the gateway to have stripped tools the job does
+not cover. A direct caller with a job scope and no gateway is still a
+network concern. The disposable per-tool check in
+`agentminder_gate.py` is not that live gate and does not change it.
+
+Every mutation that is actually sent is appended to
 `logs/vcf-mcp-audit.jsonl` with target, path, status, duration and a
-**redacted** body — anything keyed like a password, token, secret or credential
-is replaced before the line is written. `vcf_audit` reads it back, including
-changes made by earlier sessions.
-
-If you want a gate, `client.request()` is the single chokepoint that every call
-in the server passes through.
+**redacted** body. A refused call is not sent and is not audited.
+`vcf_audit` reads the log back.
 
 ---
 
@@ -402,7 +412,7 @@ in the server passes through.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-36 offline tests, no appliance required. Each pins a bug found during the
+Offline tests, no appliance required. Each pins a bug found during the
 build: camelCase tokenisation, plural stemming, `$ref` cycle handling,
 truncation across differently-named collections, secret redaction, task-id
 detection, case-insensitive task states, and the rule that no appliance address

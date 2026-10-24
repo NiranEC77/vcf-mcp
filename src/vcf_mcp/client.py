@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 import httpx
 
 from . import auth, config
+from .authz import CAPABILITY, require_mutation
 from .config import Target
 
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -86,16 +87,27 @@ def request(
     headers: dict[str, str] | None = None,
     authenticate: bool = True,
     timeout: float | None = None,
+    mutation: bool | None = None,
 ) -> tuple[int, Any, dict[str, str]]:
     """Perform one call. Returns (status, parsed_body, response_headers).
 
     Transport-level failures raise; HTTP error statuses are returned normally
     so the caller can show the appliance's own error object, which for VCF is
     far more useful than an exception (it carries remediationMessage).
+
+    A mutating call is refused before the host is resolved and before an
+    appliance token is minted. ``mutation=False`` marks a POST that does
+    not change the estate (the alert query and the validation twin).
+    Appliance login uses ``authenticate=False`` and is not the agent's
+    mutation; it is only reached after this call has been allowed.
     """
     method = method.upper()
     if not path.startswith("/"):
         path = "/" + path
+
+    effective_mutation = method in MUTATING if mutation is None else bool(mutation)
+    if effective_mutation and authenticate:
+        require_mutation(CAPABILITY.get())
 
     host = config.require_host(target)
     sent = {"Accept": "application/json"}

@@ -2,6 +2,12 @@
 
 Terse, dated. Component — change — verification.
 
+## 2026-10-24
+
+- client: **read capability cannot mutate** — `authorize_mutation` runs in `client.request` before host lookup and before an appliance token is minted; `vcf_call` and `start/stop/reset/suspend` share it; alert query and validation stay `mutation=False` — verified `pytest tests/ -q` 91 passed, no appliance
+- oauth: **`vcf_task` is a read scope** — polling a task is GET; that scope no longer counts as admin
+- proof: **`agentminder_gate.py` is disposable** — per-tool `urn:iam:agent:intent:<tool>` on fixture claims; not wired to the HTTP gate; production grants unchanged — verified `tests/test_agentminder_gate.py`
+
 ## 2026-10-12
 
 - tools: **`vcf_list_alerts` returns active alerts only** — read-only `POST /suite-api/api/alerts/query` with `activeOnly`; reply is `count`, `by_level`, and the top 25 rows (critical first, newest first) with alert name and resource name; an empty list or an error carries `reason`. Before, the plain alert list was a 116 KB page of mostly cancelled history and the AI Gateway delivered it as an empty body — verified `pytest tests/test_offline.py -q` 52 passed
