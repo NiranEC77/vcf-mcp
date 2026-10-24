@@ -278,15 +278,26 @@ What the token's `scope` may carry, any one of which is enough:
 |---|---|---|
 | a write tool name (`vcf_call`, `vcf_start_vm`, `vcf_stop_vm`, `vcf_reset_vm`, `vcf_suspend_vm`) | admin | the token was issued for a mutating tool |
 | a read tool name (`vcf_targets`, `vcf_task`, …) or `tools` | read | non-mutating calls only |
-| an intent scope, `urn:iam:agent:intent:<job>` | admin | an agent gateway in front of this server granted the agent a **job**; the gateway has already mapped the tool to that job and asked its policy engine, and strips the tools the job does not cover. This server does not redo that decision by tool name. |
+| an intent scope, `urn:iam:agent:intent:<tool>` | that tool | the scope must name the tool. A write tool may mutate. A read tool may not. |
+| a generic job scope, `urn:iam:agent:intent:vcf-inspection` | none | this used to become admin. It no longer does. |
 
-The intent rule is what lets this server sit behind an agent gateway the
-same way any MCP server you do not control does: verify the token, then
-trust the gateway for per-tool authorization. Change the prefix with
-`VCF_MCP_OAUTH_INTENT_PREFIX`. When the backend route is reachable
-without the gateway, restrict it at the network — a job scope opens the
-whole server for a direct caller, exactly as it would for any other MCP
-backend.
+**Migration.** Desktop stdio is unchanged: the person who launched the
+process is the trust boundary. Static `VCF_READ_TOKEN` and
+`VCF_ADMIN_TOKEN` are unchanged. A read token may still call `vcf_call`
+for GET; a POST is refused before the appliance is contacted. Tokens
+that already name each tool, or name `urn:iam:agent:intent:<tool>`,
+keep working.
+
+A gateway that still sends one job scope for many tools must say which
+tools that job covers. Set `VCF_MCP_GATEWAY_JOB_MAP` to a JSON object:
+
+```json
+{"urn:iam:agent:intent:vcf-inspection": ["vcf_list_vms", "vcf_targets"]}
+```
+
+The default is empty. A job that is not in the map authorizes nothing.
+Putting a write tool in the list authorizes that tool only. Change the
+intent prefix with `VCF_MCP_OAUTH_INTENT_PREFIX`.
 
 `VCF_MCP_AUDIT_LOG=/dev/stdout` keeps the mutation audit in the platform
 log when the disk is ephemeral.
@@ -393,11 +404,11 @@ refused as well.
 `vcf_task` follows a task with GET. It is a read scope. Holding it does
 not authorize a power operation.
 
-An intent scope from a gateway is still treated as admin by the HTTP
-gate. That gate trusts the gateway to have stripped tools the job does
-not cover. A direct caller with a job scope and no gateway is still a
-network concern. The disposable per-tool check in
-`agentminder_gate.py` is not that live gate and does not change it.
+A generic gateway intent does not become admin. The HTTP gate matches
+the verified token to the exact tool, then the operation guard refuses
+a mutation unless that tool was granted as a write. `agentminder_gate.py`
+is a fixture helper for older tests. The HTTP gate does not call it
+and does not accept its claims as credentials.
 
 Every mutation that is actually sent is appended to
 `logs/vcf-mcp-audit.jsonl` with target, path, status, duration and a

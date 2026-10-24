@@ -1,4 +1,11 @@
-"""Disposable per-tool grant check.
+"""Fixture-only per-tool grant check.
+
+Production HTTP does not call this module. A fixture claim is not a
+credential. The live path is ``oauth_bearer.authorize_token``, which
+accepts a token only after signature, issuer, audience, and expiry
+checks.
+
+
 
 AgentMinder authorises a call by intent scope
 ``urn:iam:agent:intent:<tool>``. This module applies that rule to fixture

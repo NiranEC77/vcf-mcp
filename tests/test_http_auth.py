@@ -63,16 +63,17 @@ def test_tool_name_scopes_decide_capability():
     assert ob.capability_for({"scope": "openid profile"}, read_scopes=reads, write_scopes=writes) is None
 
 
-def test_gateway_job_scope_is_enough():
-    """The gateway mapped tool -> job -> policy. This server does not redo it."""
+def test_generic_job_scope_is_not_admin():
+    """A job name is not a tool. It used to become admin. It must not."""
     claims = {"scope": f"{JOB} vcf-inspection urn:iam:m.meclient"}
     assert ob.intent_scopes(claims) == [JOB]
     assert ob.intent_grant(claims)
-    assert not ob.grant_ok(claims, ob.expand_read_scopes(["tools"]))
-    assert (
-        ob.capability_for(claims, read_scopes=["tools", *ob.VCF_READ_SCOPES], write_scopes=list(ob.VCF_WRITE_SCOPES))
-        == "admin"
-    )
+    reads = ["tools", *ob.VCF_READ_SCOPES]
+    writes = list(ob.VCF_WRITE_SCOPES)
+    assert ob.capability_for(claims, read_scopes=reads, write_scopes=writes) is None
+    allowed, granted_writes = ob.tools_from_claims(claims, read_scopes=reads, write_scopes=writes)
+    assert allowed == frozenset()
+    assert granted_writes == frozenset()
 
 
 def test_intent_prefix_is_configurable():
@@ -89,12 +90,12 @@ def test_scp_claim_is_read_too():
 
 # --- classify with verification mocked --------------------------------------
 
-def test_classify_accepts_job_token_for_this_resource(oauth_env):
+def test_classify_rejects_generic_job_even_when_the_signature_checks(oauth_env):
     claims = {"scope": JOB, "aud": [GATEWAY]}
     with mock.patch.object(ob, "verify_jwt", return_value=claims):
         assert (
             ob.classify("h.p.s", default_resource=RESOURCE, read_scopes=["tools"], write_scopes=["vcf_call"])
-            == "admin"
+            is None
         )
 
 
@@ -120,14 +121,18 @@ def test_static_tokens_win_and_are_constant_time(oauth_env):
 def test_gate_falls_through_to_oauth_only_when_configured():
     env = {"VCF_ADMIN_TOKEN": "a" * 20, "VCF_READ_TOKEN": "r" * 20, "VCF_MCP_OAUTH_ISSUER": ""}
     with mock.patch.dict(os.environ, env, clear=False):
-        with mock.patch.object(ob, "classify") as classify:
+        with mock.patch.object(ob, "authorize_token") as authorize:
             assert server._classify_token("h.p.s") is None
-            classify.assert_not_called()
+            authorize.assert_not_called()
     env["VCF_MCP_OAUTH_ISSUER"] = "https://issuer.example.test/t"
     with mock.patch.dict(os.environ, env, clear=False):
-        with mock.patch.object(ob, "classify", return_value="admin") as classify:
+        with mock.patch.object(
+            ob,
+            "authorize_token",
+            return_value=("admin", frozenset({"vcf_call"}), frozenset({"vcf_call"})),
+        ) as authorize:
             assert server._classify_token("h.p.s") == "admin"
-            classify.assert_called_once()
+            authorize.assert_called_once()
 
 
 def test_http_refuses_to_start_without_any_bearer():

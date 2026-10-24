@@ -9,23 +9,20 @@ server*. Two kinds of bearer are accepted:
    JWKS, unexpired, and carry an ``aud`` that names this server (its own
    ``/mcp`` URL or one of ``VCF_MCP_OAUTH_AUDIENCES``).
 
-What the token's ``scope`` may say, any one of which is enough:
+What the token's ``scope`` may say:
 
-* a **tool name** (``vcf_call``, ``vcf_targets`` ...) — the token was
-  issued for those tools; write tools give the ``admin`` capability,
-  read tools give ``read``;
-* the blanket ``tools`` scope — read capability;
-* an **intent / permission** scope from an agent gateway
-  (``urn:iam:agent:intent:<job>`` by default,
-  ``VCF_MCP_OAUTH_INTENT_PREFIX`` to change it) — the gateway in front of
-  this server has already mapped the tool the agent called to that job
-  and asked its policy engine; this server does not redo that decision
-  by tool name. Capability is ``admin``; the gateway strips the tools
-  the job does not cover.
+* a **tool name** (``vcf_call``, ``vcf_list_vms`` ...) — that exact tool;
+  a write tool may mutate, a read tool may not;
+* ``urn:iam:agent:intent:<tool>`` — the same rule, one tool;
+* the blanket ``tools`` scope — the read catalog, plus ``vcf_call``
+  for GET only.
 
-That last rule is what makes this server work behind an agent gateway
-the same way any third-party MCP server does: verify the token, do not
-re-authorize per tool.
+A generic job scope such as ``urn:iam:agent:intent:vcf-inspection``
+authorizes nothing. It used to become admin. That mapping is gone.
+Operators who still have a gateway job can set
+``VCF_MCP_GATEWAY_JOB_MAP`` to a JSON object of scope to tool names.
+The default map is empty. Invalid JSON authorizes nothing. Stdio
+clients that launch this process themselves are unchanged.
 
 This module also serves RFC 9728 Protected Resource Metadata at
 ``/.well-known/oauth-protected-resource`` so clients can discover the
@@ -237,8 +234,88 @@ def intent_scopes(claims: dict[str, Any] | None) -> list[str]:
 
 
 def intent_grant(claims: dict[str, Any] | None) -> bool:
-    """True when an agent gateway granted this agent a job on this server."""
+    """True when the token carries any scope with the intent prefix.
+
+    This is a detector. It is not permission. A generic job name does
+    not authorize a tool.
+    """
     return bool(intent_scopes(claims))
+
+
+def gateway_job_map() -> dict[str, tuple[str, ...]]:
+    """Explicit job-to-tools map. Default is empty.
+
+    ``VCF_MCP_GATEWAY_JOB_MAP`` is a JSON object whose keys are full
+    scope strings and whose values are tool names. A generic intent
+    that is not listed here authorizes nothing. Listing a write tool
+    is an operator choice for that one tool, not a grant of every
+    mutation. Invalid JSON fails closed.
+    """
+    raw = (os.environ.get("VCF_MCP_GATEWAY_JOB_MAP") or "").strip()
+    if not raw:
+        return {}
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    mapped: dict[str, tuple[str, ...]] = {}
+    for key, value in doc.items():
+        if not isinstance(key, str) or not isinstance(value, list):
+            continue
+        tools = tuple(item for item in value if isinstance(item, str) and item)
+        if tools:
+            mapped[key] = tools
+    return mapped
+
+
+def tools_from_claims(
+    claims: dict[str, Any],
+    *,
+    read_scopes: Iterable[str],
+    write_scopes: Iterable[str] = (),
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Exact tools a verified token may invoke, and which of those may mutate.
+
+    A scope authorizes a tool only when it is that tool's name or
+    ``<intent-prefix><tool>``. ``tools`` authorizes the read catalog
+    plus ``vcf_call`` as a read: GET may proceed, and the operation
+    guard still refuses POST. A generic intent is ignored unless
+    ``gateway_job_map`` lists it.
+    """
+    scopes = scopes_of(claims)
+    read_names = set(expand_read_scopes(read_scopes))
+    read_names.discard("tools")
+    write_names = {scope for scope in write_scopes if scope}
+    known = read_names | write_names
+    prefix = intent_prefix()
+    allowed: set[str] = set()
+    writes: set[str] = set()
+
+    def add(tool: str, *, as_write: bool) -> None:
+        if tool not in known:
+            return
+        allowed.add(tool)
+        if as_write and tool in write_names:
+            writes.add(tool)
+
+    if "tools" in scopes:
+        allowed.update(read_names)
+        if "vcf_call" in known:
+            allowed.add("vcf_call")
+    for scope in scopes:
+        if scope == "tools":
+            continue
+        if scope in known:
+            add(scope, as_write=True)
+            continue
+        if scope.startswith(prefix):
+            add(scope[len(prefix) :], as_write=True)
+    for scope in scopes:
+        for tool in gateway_job_map().get(scope, ()):
+            add(tool, as_write=True)
+    return frozenset(allowed), frozenset(writes)
 
 
 def capability_for(
@@ -247,15 +324,18 @@ def capability_for(
     read_scopes: Iterable[str],
     write_scopes: Iterable[str] = (),
 ) -> str | None:
-    """Pure decision: 'admin' | 'read' | None from verified claims."""
-    writes = list(write_scopes)
-    reads = expand_read_scopes(read_scopes)
-    if writes and mutating_grant(claims, writes):
+    """'admin' when a verified token names a write tool, else 'read' or None.
+
+    Admin here means the token may mutate the write tools it names.
+    It does not mean every mutation. A generic intent is not admin.
+    """
+    allowed, writes = tools_from_claims(
+        claims, read_scopes=read_scopes, write_scopes=write_scopes
+    )
+    if writes:
         return "admin"
-    if grant_ok(claims, reads or writes):
+    if allowed:
         return "read"
-    if intent_grant(claims):
-        return "admin"
     return None
 
 
@@ -369,6 +449,35 @@ def verify_jwt(token: str) -> dict[str, Any] | None:
     return claims
 
 
+def authorize_token(
+    presented: str | None,
+    *,
+    default_resource: str,
+    read_scopes: Iterable[str],
+    write_scopes: Iterable[str] = (),
+) -> tuple[str | None, frozenset[str], frozenset[str]]:
+    """Validate a JWT, then return capability, allowed tools, and write tools.
+
+    Expired, unsigned, wrong-issuer, and wrong-audience tokens return
+    no capability. Claims are accepted only after ``verify_jwt``.
+    """
+    empty: tuple[str | None, frozenset[str], frozenset[str]] = (None, frozenset(), frozenset())
+    if not presented or not looks_like_jwt(presented):
+        return empty
+    claims = verify_jwt(presented)
+    if not claims:
+        return empty
+    if not audience_ok(claims, audiences(default_resource=default_resource)):
+        return empty
+    allowed, writes = tools_from_claims(
+        claims, read_scopes=read_scopes, write_scopes=write_scopes
+    )
+    if not allowed:
+        return empty
+    capability = "admin" if writes else "read"
+    return capability, allowed, writes
+
+
 def classify(
     presented: str | None,
     *,
@@ -377,11 +486,10 @@ def classify(
     write_scopes: Iterable[str] = (),
 ) -> str | None:
     """Map a presented JWT to 'admin' | 'read' | None."""
-    if not presented or not looks_like_jwt(presented):
-        return None
-    claims = verify_jwt(presented)
-    if not claims:
-        return None
-    if not audience_ok(claims, audiences(default_resource=default_resource)):
-        return None
-    return capability_for(claims, read_scopes=read_scopes, write_scopes=write_scopes)
+    capability, _allowed, _writes = authorize_token(
+        presented,
+        default_resource=default_resource,
+        read_scopes=read_scopes,
+        write_scopes=write_scopes,
+    )
+    return capability

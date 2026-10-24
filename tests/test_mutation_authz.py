@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from vcf_mcp import client, config, tools
-from vcf_mcp.authz import CAPABILITY, Denied, authorize_mutation
+from vcf_mcp.authz import ALLOWED_TOOLS, CAPABILITY, WRITE_TOOLS, Denied, authorize_mutation
 from vcf_mcp.server import vcf_call
 
 POWER = (
@@ -134,26 +134,44 @@ def test_read_shaped_post_is_explicit(capability, monkeypatch):
     assert status == 200
 
 
-def test_generic_handler_denies_before_tools_call(capability, monkeypatch):
-    capability("read")
+def test_read_grant_cannot_post_through_vcf_call(monkeypatch):
+    """The tool is allowed. The operation guard still refuses the POST."""
+    allow = ALLOWED_TOOLS.set(frozenset({"vcf_call"}))
+    writes = WRITE_TOOLS.set(frozenset())
+    cap = CAPABILITY.set("read")
 
     def boom(*_a, **_k):
-        raise AssertionError("tools.call")
+        raise AssertionError("appliance")
 
-    monkeypatch.setattr(tools, "call", boom)
-    result = asyncio.run(vcf_call("vcenter", "POST", "/api/vcenter/vm/vm-1/power?action=stop"))
+    monkeypatch.setattr(config, "get_target", boom)
+    monkeypatch.setattr(config, "require_host", boom)
+    monkeypatch.setattr(client, "request", boom)
+    monkeypatch.setattr("vcf_mcp.auth.headers_for", boom)
+    try:
+        result = asyncio.run(vcf_call("vcenter", "POST", "/api/vcenter/vm/vm-1/power?action=stop"))
+    finally:
+        CAPABILITY.reset(cap)
+        WRITE_TOOLS.reset(writes)
+        ALLOWED_TOOLS.reset(allow)
     assert result["authorization"] == "denied"
     assert result["enforced_by"] == "vcf-mcp"
 
 
-def test_generic_handler_allows_admin_to_the_mock(capability, monkeypatch):
-    capability("admin")
+def test_write_grant_reaches_the_mock_call(monkeypatch):
+    allow = ALLOWED_TOOLS.set(frozenset({"vcf_call"}))
+    writes = WRITE_TOOLS.set(frozenset({"vcf_call"}))
+    cap = CAPABILITY.set("read")
     monkeypatch.setattr(
         tools,
         "call",
-        lambda **_k: {"ok": True, "enforced_by": "vcf-mcp", "mock": True},
+        lambda **_k: {"ok": True, "mock": True},
     )
-    result = asyncio.run(vcf_call("vcenter", "POST", "/v1/hosts"))
+    try:
+        result = asyncio.run(vcf_call("vcenter", "POST", "/v1/hosts"))
+    finally:
+        CAPABILITY.reset(cap)
+        WRITE_TOOLS.reset(writes)
+        ALLOWED_TOOLS.reset(allow)
     assert result["ok"] is True
 
 

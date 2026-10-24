@@ -68,6 +68,19 @@ def _hints(*, read_only: bool = False, destructive: bool = False):
     return {"annotations": ToolAnnotations(**wanted)}
 
 
+async def _guarded(name: str, func, /, **kwargs) -> Any:
+    """Grant check, then the tool. The operation guard lives in the tool."""
+    from .authz import bind_tool, reset_tool
+
+    denial, token = bind_tool(name)
+    if denial:
+        return denial
+    try:
+        return await _run(func, **kwargs)
+    finally:
+        reset_tool(token)
+
+
 async def _run(func, /, **kwargs) -> Any:
     """Call a blocking tool implementation off the event loop.
 
@@ -89,7 +102,7 @@ async def vcf_targets(check_reachability: bool = True) -> Any:
     how many API operations it serves, and whether it is currently answering.
     The `target` name from this list is what every other tool expects.
     """
-    return await _run(tools.targets, check_reachability=check_reachability)
+    return await _guarded("vcf_targets", tools.targets, check_reachability=check_reachability)
 
 
 @mcp.tool(**_hints(read_only=True))
@@ -115,7 +128,8 @@ async def vcf_search_api(
         limit: Maximum results (default 25).
         include_deprecated: Include operations VCF 9.1 marks deprecated.
     """
-    return await _run(
+    return await _guarded(
+        "vcf_search_api",
         tools.search_api,
         query=query,
         target=target,
@@ -148,7 +162,8 @@ async def vcf_describe_api(
             when a nested object shows "truncated".
         max_properties: Cap properties rendered per object (default 60).
     """
-    return await _run(
+    return await _guarded(
+        "vcf_describe_api",
         tools.describe_api,
         target=target,
         operation_id=operation_id,
@@ -195,21 +210,10 @@ async def vcf_call(
         timeout: Seconds to wait (VCF operations can be slow; default 300).
         max_response_chars: Shrink oversized responses to fit (default 20000).
     """
-    # Same guard the dedicated power tools hit inside tools.call.
-    # A read token returns here, before tools.call and before any appliance.
-    if method.upper() not in ("GET", "HEAD", "OPTIONS"):
-        from .authz import CAPABILITY, authorize_mutation
-
-        outcome = authorize_mutation(CAPABILITY.get())
-        if outcome != "permit":
-            return {
-                "ok": False,
-                "denied": True,
-                "authorization": outcome,
-                "enforced_by": "vcf-mcp",
-                "error": f"authorization {outcome}",
-            }
-    return await _run(
+    # Grant bind sets read or admin for this call. tools.call then
+    # refuses a mutation before it resolves a host.
+    return await _guarded(
+        "vcf_call",
         tools.call,
         target=target,
         method=method,
@@ -236,7 +240,8 @@ async def vcf_task(
         wait_seconds: Poll until the task reaches a terminal state or this
             many seconds elapse. 0 (default) checks once and returns.
     """
-    return await _run(
+    return await _guarded(
+        "vcf_task",
         tools.task,
         target=target,
         task_id=task_id,
@@ -273,8 +278,8 @@ async def vcf_validate(
         body: The same JSON body you would give the real operation.
         wait_seconds: How long to poll for the validation verdict.
     """
-    return await _run(
-        tools.validate, target=target, path=path, body=body, wait_seconds=wait_seconds
+    return await _guarded(
+        "vcf_validate", tools.validate, target=target, path=path, body=body, wait_seconds=wait_seconds
     )
 
 
@@ -290,8 +295,8 @@ async def vcf_inventory(targets: list[str] | None = None, per_section_limit: int
         targets: Restrict to specific appliances (default: all with a recipe).
         per_section_limit: Items shown per section before summarising.
     """
-    return await _run(
-        tools.inventory, targets_wanted=targets, per_section_limit=per_section_limit
+    return await _guarded(
+        "vcf_inventory", tools.inventory, targets_wanted=targets, per_section_limit=per_section_limit
     )
 
 
@@ -303,103 +308,103 @@ async def vcf_audit(limit: int = 50) -> Any:
     redacted body. Use it to answer "what did I change?" -- including
     changes made by an earlier session.
     """
-    return await _run(tools.audit, limit=limit)
+    return await _guarded("vcf_audit", tools.audit, limit=limit)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_vms() -> Any:
     """List every virtual machine and the count. VM management."""
-    return await _run(tools.list_vms)
+    return await _guarded("vcf_list_vms", tools.list_vms)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_get_vm(vm: str) -> Any:
     """Get one virtual machine. Pass vm from vcf_list_vms. VM management."""
-    return await _run(tools.get_vm, vm=vm)
+    return await _guarded("vcf_get_vm", tools.get_vm, vm=vm)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_vm_power_state(vm: str) -> Any:
     """Current power state of one virtual machine. VM management."""
-    return await _run(tools.vm_power_state, vm=vm)
+    return await _guarded("vcf_vm_power_state", tools.vm_power_state, vm=vm)
 
 
 @mcp.tool(**_hints(destructive=True))
 async def vcf_start_vm(vm: str) -> Any:
     """Power on one virtual machine. Takes effect now. VM management."""
-    return await _run(tools.start_vm, vm=vm)
+    return await _guarded("vcf_start_vm", tools.start_vm, vm=vm)
 
 
 @mcp.tool(**_hints(destructive=True))
 async def vcf_stop_vm(vm: str) -> Any:
     """Power off one virtual machine. Takes effect now. VM management."""
-    return await _run(tools.stop_vm, vm=vm)
+    return await _guarded("vcf_stop_vm", tools.stop_vm, vm=vm)
 
 
 @mcp.tool(**_hints(destructive=True))
 async def vcf_reset_vm(vm: str) -> Any:
     """Reset one virtual machine. Takes effect now. VM management."""
-    return await _run(tools.reset_vm, vm=vm)
+    return await _guarded("vcf_reset_vm", tools.reset_vm, vm=vm)
 
 
 @mcp.tool(**_hints(destructive=True))
 async def vcf_suspend_vm(vm: str) -> Any:
     """Suspend one virtual machine. Takes effect now. VM management."""
-    return await _run(tools.suspend_vm, vm=vm)
+    return await _guarded("vcf_suspend_vm", tools.suspend_vm, vm=vm)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_networks() -> Any:
     """List vCenter networks and the count. Network management."""
-    return await _run(tools.list_networks)
+    return await _guarded("vcf_list_networks", tools.list_networks)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_segments() -> Any:
     """List NSX segments and the count. Network management."""
-    return await _run(tools.list_segments)
+    return await _guarded("vcf_list_segments", tools.list_segments)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_gateways() -> Any:
     """List NSX tier-0 and tier-1 gateways. Network management."""
-    return await _run(tools.list_gateways)
+    return await _guarded("vcf_list_gateways", tools.list_gateways)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_datastores() -> Any:
     """List datastores and the count. Storage management."""
-    return await _run(tools.list_datastores)
+    return await _guarded("vcf_list_datastores", tools.list_datastores)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_get_datastore(datastore: str) -> Any:
     """Get one datastore. Pass id from vcf_list_datastores. Storage management."""
-    return await _run(tools.get_datastore, datastore=datastore)
+    return await _guarded("vcf_get_datastore", tools.get_datastore, datastore=datastore)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_datastore_policy(datastore: str) -> Any:
     """Default storage policy on one datastore. Storage management."""
-    return await _run(tools.datastore_policy, datastore=datastore)
+    return await _guarded("vcf_datastore_policy", tools.datastore_policy, datastore=datastore)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_list_alerts() -> Any:
     """Active VCF Operations alerts: count, count by level, top 25 critical first. Metrics."""
-    return await _run(tools.list_alerts)
+    return await _guarded("vcf_list_alerts", tools.list_alerts)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_ops_snapshot() -> Any:
     """One Operations snapshot of active alerts. Metrics."""
-    return await _run(tools.ops_snapshot)
+    return await _guarded("vcf_ops_snapshot", tools.ops_snapshot)
 
 
 @mcp.tool(**_hints(read_only=True))
 async def vcf_vm_disk_latency(vms: list[str]) -> Any:
     """Latest disk latency of up to 8 VMs from VCF Operations, in ms. Pass VM names. Metrics."""
-    return await _run(tools.vm_disk_latency, vms=vms)
+    return await _guarded("vcf_vm_disk_latency", tools.vm_disk_latency, vms=vms)
 
 
 # ---------------------------------------------------------------------------
@@ -412,11 +417,12 @@ import secrets  # noqa: E402
 from urllib.parse import urlsplit  # noqa: E402
 
 from . import oauth_bearer  # noqa: E402
-from .authz import CAPABILITY  # noqa: E402
+from .authz import ALLOWED_TOOLS, CAPABILITY  # noqa: E402
+from .authz import WRITE_TOOLS as GRANTED_WRITES  # noqa: E402
 
-# Per-request capability set by the HTTP gate. "admin" may mutate; "read"
-# may only perform non-mutating calls. Stdio never sets it, so the default
-# in authz.CAPABILITY applies.
+# Tool names. The per-request grant sets live in authz and start unset,
+# which is stdio. HTTP sets them for each request and starts the
+# capability at read until the invoked tool is bound.
 READ_TOOLS = oauth_bearer.VCF_READ_SCOPES
 WRITE_TOOLS = oauth_bearer.VCF_WRITE_SCOPES
 
@@ -425,29 +431,41 @@ def _default_resource_url() -> str:
     return oauth_bearer.resource_url(default="http://127.0.0.1:8080/mcp")
 
 
-def _classify_token(presented: str | None) -> str | None:
-    """Map a bearer token -> 'admin' | 'read' | None.
+def _access(
+    presented: str | None,
+) -> tuple[str | None, frozenset[str], frozenset[str]]:
+    """Validate a bearer and return capability, allowed tools, write tools.
 
-    Static tokens first (constant-time compare). Then a JWT from the OAuth
-    issuer, if one is configured: tool-name scopes, the blanket ``tools``
-    scope, or a gateway-issued intent scope (see ``oauth_bearer``).
+    Static tokens keep their old meaning. A JWT must name each tool.
+    A generic intent does not. ``capability`` is the token's ceiling.
+    The request still starts at read until ``bind_tool``.
     """
+    empty: tuple[str | None, frozenset[str], frozenset[str]] = (None, frozenset(), frozenset())
     if not presented:
-        return None
+        return empty
     admin = os.environ.get("VCF_ADMIN_TOKEN", "")
     read = os.environ.get("VCF_READ_TOKEN", "")
+    reads = frozenset(READ_TOOLS)
+    writes = frozenset(WRITE_TOOLS)
     if admin and secrets.compare_digest(presented, admin):
-        return "admin"
+        return "admin", reads | writes, writes
     if read and secrets.compare_digest(presented, read):
-        return "read"
+        # vcf_call stays invocable. Mutations are refused by the operation guard.
+        return "read", reads | frozenset({"vcf_call"}), frozenset()
     if not oauth_bearer.enabled():
-        return None
-    return oauth_bearer.classify(
+        return empty
+    return oauth_bearer.authorize_token(
         presented,
         default_resource=_default_resource_url(),
         read_scopes=["tools", *READ_TOOLS],
         write_scopes=list(WRITE_TOOLS),
     )
+
+
+def _classify_token(presented: str | None) -> str | None:
+    """Map a bearer token -> 'admin' | 'read' | None."""
+    capability, _allowed, _writes = _access(presented)
+    return capability
 
 
 def _http_token_problems() -> list[str]:
@@ -537,7 +555,7 @@ def build_http_app():
                     presented = raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
                     break
 
-            capability = _classify_token(presented)
+            capability, allowed, writes = _access(presented)
             if capability is None:
                 headers = {
                     "WWW-Authenticate": oauth_bearer.www_authenticate(
@@ -550,7 +568,8 @@ def build_http_app():
                         "detail": (
                             "Present a bearer token: VCF_READ_TOKEN for reads, "
                             "VCF_ADMIN_TOKEN for mutations, or an access token "
-                            "from the configured OAuth issuer for this resource."
+                            "whose scope names the tool. A generic gateway "
+                            "intent is not accepted."
                         ),
                     },
                     status_code=401,
@@ -558,11 +577,16 @@ def build_http_app():
                 )(scope, receive, send)
                 return
 
-            token = CAPABILITY.set(capability)
+            # Least privilege until bind_tool sees the invoked tool.
+            cap_token = CAPABILITY.set("read")
+            allow_token = ALLOWED_TOOLS.set(allowed)
+            write_token = GRANTED_WRITES.set(writes)
             try:
                 await self.app(scope, receive, send)
             finally:
-                CAPABILITY.reset(token)
+                GRANTED_WRITES.reset(write_token)
+                ALLOWED_TOOLS.reset(allow_token)
+                CAPABILITY.reset(cap_token)
 
     hosts = _allowed_hosts()
     security = TransportSecuritySettings(
