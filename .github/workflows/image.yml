@@ -31,8 +31,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/vcf-mcp:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/vcf-mcp:latest
+            ghcr.io/niranec77/vcf-mcp:${{ github.sha }}
+            ghcr.io/niranec77/vcf-mcp:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
